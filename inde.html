@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>TiendaYa - Catálogo NoSQL & Historial</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 font-sans min-h-screen">
+
+  <nav class="bg-indigo-900 text-white p-4 shadow-md flex justify-between items-center">
+    <h1 class="text-2xl font-bold tracking-wide">TiendaYa · Base Documental</h1>
+    <div class="space-x-2">
+      <button onclick="mostrarVista('catalogo')" class="px-4 py-2 bg-indigo-700 hover:bg-indigo-600 rounded text-sm font-medium">Catálogo Cliente</button>
+      <button onclick="mostrarVista('admin')" class="px-4 py-2 bg-indigo-700 hover:bg-indigo-600 rounded text-sm font-medium">Panel Admin (Crear/Editar)</button>
+      <button onclick="mostrarVista('historial')" class="px-4 py-2 bg-indigo-700 hover:bg-indigo-600 rounded text-sm font-medium">Historial Temporal</button>
+    </div>
+  </nav>
+
+  <main class="max-w-6xl mx-auto p-6">
+
+    <!-- SECCIÓN 1: CATÁLOGO -->
+    <section id="vista-catalogo">
+      <div class="flex justify-between items-center mb-6">
+        <h2 class="text-xl font-bold text-slate-800">Catálogo de Productos con Atributos Heterogéneos</h2>
+        <div class="flex items-center space-x-2">
+          <label class="text-sm font-medium text-slate-600">Filtrar Categoría:</label>
+          <select id="filtro-categoria" onchange="cargarProductos()" class="p-2 border rounded bg-white shadow-sm">
+            <option value="">Todas las Categorías</option>
+            <option value="2">Laptops (Tecnología)</option>
+            <option value="3">Monitores (Tecnología)</option>
+            <option value="5">Playeras (Ropa)</option>
+          </select>
+        </div>
+      </div>
+      <div id="grid-productos" class="grid grid-cols-1 md:grid-cols-3 gap-6"></div>
+    </section>
+
+    <!-- SECCIÓN 2: FORMULARIO DINÁMICO ADMIN -->
+    <section id="vista-admin" class="hidden bg-white p-6 rounded-lg shadow-md max-w-2xl mx-auto">
+      <h2 class="text-xl font-bold text-slate-800 mb-4">Gestión de Catálogo (Formulario Polimórfico)</h2>
+      <form id="form-producto" onsubmit="guardarProducto(event)" class="space-y-4">
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-bold uppercase text-slate-500 mb-1">SKU</label>
+            <input type="text" id="p-sku" required class="w-full border p-2 rounded">
+          </div>
+          <div>
+            <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Nombre</label>
+            <input type="text" id="p-nombre" required class="w-full border p-2 rounded">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Descripción</label>
+          <textarea id="p-desc" required class="w-full border p-2 rounded rows-2"></textarea>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4">
+          <div>
+            <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Precio (Q)</label>
+            <input type="number" step="0.01" id="p-precio" required class="w-full border p-2 rounded">
+          </div>
+          <div>
+            <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Stock</label>
+            <input type="number" id="p-stock" required class="w-full border p-2 rounded">
+          </div>
+          <div>
+            <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Categoría</label>
+            <select id="p-categoria" onchange="renderAtributosDinamicos()" class="w-full border p-2 rounded bg-white">
+              <option value="laptops">Laptops</option>
+              <option value="monitores">Monitores</option>
+              <option value="ropa">Ropa / Playeras</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Atributos Dinámicos Heterogéneos -->
+        <div class="p-4 bg-slate-50 border border-slate-200 rounded">
+          <h3 class="text-sm font-bold text-slate-700 mb-2">Atributos Específicos de Categoría</h3>
+          <div id="contenedor-atributos-dinamicos" class="grid grid-cols-2 gap-4"></div>
+        </div>
+
+        <button type="submit" class="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded">Guardar en Base Documental</button>
+      </form>
+    </section>
+
+    <!-- SECCIÓN 3: HISTORIAL DE CAMBIOS (POINT-IN-TIME) -->
+    <section id="vista-historial" class="hidden bg-white p-6 rounded-lg shadow-md max-w-2xl mx-auto">
+      <h2 class="text-xl font-bold text-slate-800 mb-4">Reconstrucción Temporal de Producto</h2>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-xs font-bold uppercase text-slate-500 mb-1">ID Producto</label>
+          <input type="text" id="h-prod-id" value="PROD-0001" placeholder="Ej: PROD-0001" class="w-full border p-2 rounded">
+        </div>
+        <div>
+          <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Fecha y Hora de Corte (Cualquier punto en el tiempo)</label>
+          <input type="datetime-local" id="h-fecha" class="w-full border p-2 rounded">
+        </div>
+        <button onclick="consultarHistorial()" class="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded">Reconstruir Estado</button>
+      </div>
+
+      <div id="resultado-historial" class="mt-6 hidden p-4 bg-slate-50 border rounded">
+        <h3 class="font-bold text-indigo-900 border-b pb-1 mb-2">Estado Vigente Reconstruido</h3>
+        <pre id="json-historial" class="text-xs bg-slate-900 text-emerald-400 p-4 rounded overflow-x-auto"></pre>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    const API_URL = "http://127.0.0.1:8000/api";
+
+    function mostrarVista(vista) {
+      document.getElementById("vista-catalogo").classList.add("hidden");
+      document.getElementById("vista-admin").classList.add("hidden");
+      document.getElementById("vista-historial").classList.add("hidden");
+      document.getElementById(`vista-${vista}`).classList.remove("hidden");
+      if (vista === 'catalogo') cargarProductos();
+      if (vista === 'admin') renderAtributosDinamicos();
+    }
+
+    async function cargarProductos() {
+      const cat = document.getElementById("filtro-categoria").value;
+      const url = cat ? `${API_URL}/productos?categoria_id=${cat}` : `${API_URL}/productos`;
+      const res = await fetch(url);
+      const productos = await res.json();
+      
+      const grid = document.getElementById("grid-productos");
+      grid.innerHTML = "";
+      
+      productos.forEach(p => {
+        let atributosHtml = "";
+        for (const [key, val] of Object.entries(p.atributos || {})) {
+          atributosHtml += `<div class="text-xs text-slate-500"><span class="font-semibold text-slate-700">${key}:</span> ${Array.isArray(val) ? val.join(", ") : val}</div>`;
+        }
+        
+        const imgUrl = (p.imagenes && p.imagenes.length > 0) ? p.imagenes[0].url : 'https://via.placeholder.com/200';
+
+        grid.innerHTML += `
+          <div class="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden flex flex-col justify-between">
+            <div class="p-4">
+              <span class="text-[10px] font-bold uppercase px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded">${p.categoria.nombre}</span>
+              <h3 class="font-bold text-slate-800 text-lg mt-1">${p.nombre}</h3>
+              <p class="text-indigo-600 font-extrabold text-xl my-2">Q${p.precio_base.toFixed(2)}</p>
+              <div class="bg-slate-50 p-2 rounded border border-slate-100 space-y-1 mb-2">
+                ${atributosHtml}
+              </div>
+            </div>
+            <div class="p-4 bg-slate-50 border-t text-xs text-slate-400">SKU: ${p.sku} | ID: ${p._id}</div>
+          </div>
+        `;
+      });
+    }
+
+    function renderAtributosDinamicos() {
+      const cat = document.getElementById("p-categoria").value;
+      const c = document.getElementById("contenedor-atributos-dinamicos");
+      c.innerHTML = "";
+
+      if (cat === "laptops") {
+        c.innerHTML = `
+          <div><label class="text-xs font-medium">Procesador</label><input type="text" id="attr-cpu" class="w-full border p-1 rounded text-sm" value="Intel i7 13th Gen"></div>
+          <div><label class="text-xs font-medium">RAM (GB)</label><input type="number" id="attr-ram" class="w-full border p-1 rounded text-sm" value="16"></div>
+          <div><label class="text-xs font-medium">Almacenamiento (GB)</label><input type="number" id="attr-ssd" class="w-full border p-1 rounded text-sm" value="512"></div>
+          <div><label class="text-xs font-medium">Pantalla (Hz)</label><input type="number" id="attr-hz" class="w-full border p-1 rounded text-sm" value="144"></div>
+        `;
+      } else if (cat === "monitores") {
+        c.innerHTML = `
+          <div><label class="text-xs font-medium">Pulgadas</label><input type="number" id="attr-pulgadas" class="w-full border p-1 rounded text-sm" value="27"></div>
+          <div><label class="text-xs font-medium">Panel</label><input type="text" id="attr-panel" class="w-full border p-1 rounded text-sm" value="IPS"></div>
+          <div><label class="text-xs font-medium">Resolución</label><input type="text" id="attr-res" class="w-full border p-1 rounded text-sm" value="1920x1080"></div>
+          <div><label class="text-xs font-medium">Tasa Refresco (Hz)</label><input type="number" id="attr-hz-mon" class="w-full border p-1 rounded text-sm" value="180"></div>
+        `;
+      } else if (cat === "ropa") {
+        c.innerHTML = `
+          <div><label class="text-xs font-medium">Talla</label><input type="text" id="attr-talla" class="w-full border p-1 rounded text-sm" value="M"></div>
+          <div><label class="text-xs font-medium">Color</label><input type="text" id="attr-color" class="w-full border p-1 rounded text-sm" value="Negro"></div>
+          <div><label class="text-xs font-medium">Material</label><input type="text" id="attr-mat" class="w-full border p-1 rounded text-sm" value="100% Algodón"></div>
+        `;
+      }
+    }
+
+    async function guardarProducto(e) {
+      e.preventDefault();
+      const cat = document.getElementById("p-categoria").value;
+      let catId = 2, catNombre = "Laptops";
+      let atributos = {};
+
+      if (cat === "laptops") {
+        catId = 2; catNombre = "Laptops";
+        atributos = {
+          procesador: document.getElementById("attr-cpu").value,
+          memoria_ram_gb: parseInt(document.getElementById("attr-ram").value),
+          almacenamiento_ssd_gb: parseInt(document.getElementById("attr-ssd").value),
+          tasa_refresco_hz: parseInt(document.getElementById("attr-hz").value)
+        };
+      } else if (cat === "monitores") {
+        catId = 3; catNombre = "Monitores";
+        atributos = {
+          tamano_pulgadas: parseFloat(document.getElementById("attr-pulgadas").value),
+          tipo_panel: document.getElementById("attr-panel").value,
+          resolucion: document.getElementById("attr-res").value,
+          tasa_refresco_hz: parseInt(document.getElementById("attr-hz-mon").value)
+        };
+      } else {
+        catId = 5; catNombre = "Playeras";
+        atributos = {
+          talla: document.getElementById("attr-talla").value,
+          color: document.getElementById("attr-color").value,
+          material: document.getElementById("attr-mat").value
+        };
+      }
+
+      const payload = {
+        sku: document.getElementById("p-sku").value,
+        nombre: document.getElementById("p-nombre").value,
+        descripcion: document.getElementById("p-desc").value,
+        precio_base: parseFloat(document.getElementById("p-precio").value),
+        stock_disponible: parseInt(document.getElementById("p-stock").value),
+        id_categoria: catId,
+        nombre_categoria: catNombre,
+        id_vendedor: 2,
+        nombre_vendedor: "TechStore Oficial",
+        atributos: atributos
+      };
+
+      const res = await fetch(`${API_URL}/productos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        alert("¡Producto guardado y evento de cambio registrado!");
+        mostrarVista('catalogo');
+      }
+    }
+
+    async function consultarHistorial() {
+      const prodId = document.getElementById("h-prod-id").value;
+      const fechaVal = document.getElementById("h-fecha").value;
+      if (!fechaVal) {
+        alert("Por favor selecciona una fecha de corte.");
+        return;
+      }
+      
+      const isoFecha = new Date(fechaVal).toISOString();
+      const res = await fetch(`${API_URL}/historial/${prodId}?fecha_corte=${isoFecha}`);
+      
+      const divRes = document.getElementById("resultado-historial");
+      const preJson = document.getElementById("json-historial");
+      
+      if (res.ok) {
+        const data = await res.json();
+        preJson.innerText = JSON.stringify(data, null, 2);
+        divRes.classList.remove("hidden");
+      } else {
+        const err = await res.json();
+        alert(`Error: ${err.detail}`);
+        divRes.classList.add("hidden");
+      }
+    }
+
+    // Inicialización por defecto
+    mostrarVista('catalogo');
+  </script>
+</body>
+</html>
