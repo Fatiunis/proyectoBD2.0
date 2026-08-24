@@ -9,10 +9,10 @@ from pymongo import MongoClient, ASCENDING
 # ============================================================================
 PG_CONFIG = {
     "host": "localhost",
-    "port": 5432,
+    "port": 5432, #CAMBIAR EL PUERTO  A 5433 MARCOS
     "dbname": "tiendaya_db",
     "user": "postgres",
-    "password": "tu_password"
+    "password": "1234"  #CAMBIAR LA PASSWORD!!!!
 }
 
 MONGO_URI = "mongodb://localhost:27017/"
