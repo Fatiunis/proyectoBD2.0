@@ -1,121 +1,122 @@
+import os
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 from pymongo import MongoClient, ASCENDING
-from pydantic import BaseModel
 
-app = FastAPI(title="TiendaYa API - Catálogo & Historial")
+app = Flask(__name__)
+CORS(app)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-MONGO_URI = "mongodb://localhost:27017/"
+# Conexión a MongoDB
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 client = MongoClient(MONGO_URI)
 db = client["tiendaya_nosql"]
 col_productos = db["productos"]
 col_historial = db["historial_cambios_productos"]
 
-class ProductoInput(BaseModel):
-    sku: str
-    nombre: str
-    descripcion: str
-    precio_base: float
-    id_categoria: int
-    nombre_categoria: str
-    id_vendedor: int
-    nombre_vendedor: str
-    stock_disponible: int
-    atributos: Dict[str, Any]
-    imagenes: Optional[List[Dict[str, Any]]] = []
 
-@app.get("/api/categorias")
+@app.route("/api/categorias", methods=["GET"])
 def get_categorias():
     categorias = col_productos.distinct("categoria")
-    return categorias
+    return jsonify(categorias)
 
-@app.get("/api/productos")
-def get_productos(categoria_id: Optional[int] = None):
+
+@app.route("/api/productos", methods=["GET"])
+def get_productos():
+    cat_id = request.args.get("categoria_id")
     query = {"activo": True}
-    if categoria_id is not None:
-        query["categoria.id_categoria"] = categoria_id
-    
-    docs = list(col_productos.find(query, {"_id": 1, "sku": 1, "nombre": 1, "precio_base": 1, "categoria": 1, "atributos": 1, "imagenes": 1}).sort("precio_base", ASCENDING))
+    if cat_id:
+        try:
+            query["categoria.id_categoria"] = int(cat_id)
+        except ValueError:
+            pass
+
+    docs = list(col_productos.find(
+        query,
+        {"_id": 1, "sku": 1, "nombre": 1, "precio_base": 1, "categoria": 1, "atributos": 1, "imagenes": 1}
+    ).sort("precio_base", ASCENDING))
+
     for d in docs:
         d["_id"] = str(d["_id"])
-    return docs
+    return jsonify(docs)
 
-@app.get("/api/productos/{producto_id}")
-def get_producto_detalle(producto_id: str):
+
+@app.route("/api/productos/<producto_id>", methods=["GET"])
+def get_producto_detalle(producto_id):
     doc = col_productos.find_one({"_id": producto_id})
     if not doc:
-        raise HTTPException(status_code=404, detail="Producto no encontrado")
+        return jsonify({"error": "Producto no encontrado"}), 404
     doc["_id"] = str(doc["_id"])
-    return doc
+    return jsonify(doc)
 
-@app.post("/api/productos")
-def crear_o_actualizar_producto(prod: ProductoInput):
-    doc_id = f"PROD-{prod.sku.replace(' ', '-').upper()}"
+
+@app.route("/api/productos", methods=["POST"])
+def crear_o_actualizar_producto():
+    data = request.get_json()
+    if not data or "sku" not in data:
+        return jsonify({"error": "Datos inválidos"}), 400
+
+    doc_id = f"PROD-{data['sku'].replace(' ', '-').upper()}"
     now = datetime.now(timezone.utc)
-    
+
     nuevo_doc = {
         "_id": doc_id,
-        "sku": prod.sku,
-        "nombre": prod.nombre,
-        "descripcion": prod.descripcion,
-        "precio_base": prod.precio_base,
+        "sku": data["sku"],
+        "nombre": data["nombre"],
+        "descripcion": data["descripcion"],
+        "precio_base": float(data["precio_base"]),
         "activo": True,
         "categoria": {
-            "id_categoria": prod.id_categoria,
-            "nombre": prod.nombre_categoria
+            "id_categoria": data.get("id_categoria", 1),
+            "nombre": data.get("nombre_categoria", "General")
         },
         "vendedor": {
-            "id_vendedor": prod.id_vendedor,
-            "nombre_comercial": prod.nombre_vendedor,
-            "email_contacto": f"{prod.nombre_vendedor.lower().replace(' ', '')}@tiendaya.com"
+            "id_vendedor": data.get("id_vendedor", 2),
+            "nombre_comercial": data.get("nombre_vendedor", "TechStore"),
+            "email_contacto": f"{data.get('nombre_vendedor', 'tech').lower().replace(' ', '')}@tiendaya.com"
         },
-        "stock_disponible": prod.stock_disponible,
-        "imagenes": prod.imagenes if prod.imagenes else [{"url": "https://via.placeholder.com/300", "es_portada": True, "orden": 1}],
-        "atributos": prod.atributos,
+        "stock_disponible": int(data.get("stock_disponible", 0)),
+        "imagenes": data.get("imagenes", [{"url": "https://via.placeholder.com/300", "es_portada": True, "orden": 1}]),
+        "atributos": data.get("atributos", {}),
         "ultima_actualizacion": now.isoformat()
     }
-    
-    # Upsert en la colección de productos
+
+    # Upsert en MongoDB
     col_productos.update_one({"_id": doc_id}, {"$set": nuevo_doc}, upsert=True)
-    
-    # Registro de evento inmutable en historial (Event Sourcing)
+
+    # Event Sourcing en Historial
     evento = {
         "producto_id": doc_id,
         "tipo_evento": "ACTUALIZACION_PANEL_ADMIN",
         "fecha_evento": now,
         "usuario_responsable": {
-            "id_usuario": prod.id_vendedor,
-            "nombre": prod.nombre_vendedor,
+            "id_usuario": data.get("id_vendedor", 2),
+            "nombre": data.get("nombre_vendedor", "TechStore"),
             "rol": "administrador"
         },
         "estado_resultante": {
-            "nombre": prod.nombre,
-            "descripcion": prod.descripcion,
-            "precio_base": prod.precio_base,
+            "nombre": data["nombre"],
+            "descripcion": data["descripcion"],
+            "precio_base": float(data["precio_base"]),
             "activo": True,
-            "atributos": prod.atributos
+            "atributos": data.get("atributos", {})
         }
     }
     col_historial.insert_one(evento)
-    
-    return {"mensaje": "Producto guardado con éxito", "producto_id": doc_id}
 
-@app.get("/api/historial/{producto_id}")
-def reconstruir_historial(producto_id: str, fecha_corte: str = Query(...)):
+    return jsonify({"mensaje": "Producto guardado con éxito", "producto_id": doc_id}), 201
+
+
+@app.route("/api/historial/<producto_id>", methods=["GET"])
+def reconstruir_historial(producto_id):
+    fecha_corte = request.args.get("fecha_corte")
+    if not fecha_corte:
+        return jsonify({"error": "Parámetro fecha_corte requerido"}), 400
+
     try:
         dt_corte = datetime.fromisoformat(fecha_corte.replace("Z", "+00:00"))
     except ValueError:
-        raise HTTPException(status_code=400, detail="Formato de fecha inválido. Usar ISO 8601 (YYYY-MM-DDTHH:MM:SS)")
+        return jsonify({"error": "Formato de fecha inválido. Usar ISO 8601"}), 400
 
     pipeline = [
         {"$match": {"producto_id": producto_id, "fecha_evento": {"$lte": dt_corte}}},
@@ -132,12 +133,15 @@ def reconstruir_historial(producto_id: str, fecha_corte: str = Query(...)):
             }
         }
     ]
-    
+
     res = list(col_historial.aggregate(pipeline))
     if not res:
-        raise HTTPException(status_code=404, detail="No existe estado registrado previo a la fecha especificada.")
-    return res[0]
+        return jsonify({"error": "No existe estado registrado previo a la fecha especificada."}), 404
+
+    # Convertir datetimes a formato ISO para devolver JSON limpio
+    res[0]["fecha_vigencia_evento"] = res[0]["fecha_vigencia_evento"].isoformat()
+    return jsonify(res[0])
+
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    app.run(host="127.0.0.1", port=8000, debug=True)
