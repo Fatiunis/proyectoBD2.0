@@ -1,22 +1,25 @@
 import os
 from datetime import datetime, timezone
+from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient, ASCENDING
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, Json
 from werkzeug.security import generate_password_hash, check_password_hash
+
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 
 # Configuración de conexiones
 PG_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "dbname": "tiendaya_db",
-    "user": "postgres",
-    "password": "1234"  # Ajusta a tu contraseña local
+    "host": os.getenv("PG_HOST", "localhost"),
+    "port": int(os.getenv("PG_PORT", "5432")), #Este es el puerto que tiene que cambiar marcos al 5433
+    "dbname": os.getenv("PG_DBNAME", "tiendaya_db"),
+    "user": os.getenv("PG_USER", "postgres"),
+    "password": os.getenv("PG_PASSWORD", "root") #Esta es la constraseña que tienen que cambiar
 }
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
@@ -116,13 +119,51 @@ def login():
         return jsonify({"error": f"Error en base de datos: {str(e)}"}), 500
 
 
+@app.route("/api/checkout", methods=["POST"])
+def procesar_checkout():
+    data = request.get_json() or {}
+    id_comprador = data.get("id_comprador")
+    id_direccion = data.get("id_direccion")
+    metodo_pago = data.get("metodo_pago")
+    referencia_pago = data.get("referencia_pago")
+    items = data.get("items")
+
+    if not all([id_comprador, id_direccion, metodo_pago, referencia_pago]) or not items:
+        return jsonify({"error": "id_comprador, id_direccion, metodo_pago, referencia_pago e items son obligatorios"}), 400
+
+    conn = None
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "CALL sp_procesar_checkout(%s, %s, %s, %s, %s, NULL, NULL)",
+            (id_comprador, id_direccion, metodo_pago, referencia_pago, Json(items))
+        )
+        id_pedido, mensaje = cur.fetchone()
+        conn.commit()
+        cur.close()
+        return jsonify({"mensaje": mensaje, "id_pedido": id_pedido}), 201
+    except psycopg2.Error as e:
+        if conn:
+            conn.rollback()
+        return jsonify({"error": e.diag.message_primary or str(e).strip()}), 400
+    finally:
+        if conn:
+            conn.close()
+
+
 # ============================================================================
 # MÓDULO DE CATÁLOGO & HISTORIAL (MONGODB - ENTREGA 1)
 # ============================================================================
 
 @app.route("/api/categorias", methods=["GET"])
 def get_categorias():
-    categorias = col_productos.distinct("categoria")
+    pipeline = [
+        {"$group": {"_id": "$categoria.id_categoria", "nombre": {"$first": "$categoria.nombre"}}},
+        {"$project": {"_id": 0, "id_categoria": "$_id", "nombre": 1}},
+        {"$sort": {"nombre": 1}}
+    ]
+    categorias = list(col_productos.aggregate(pipeline))
     return jsonify(categorias)
 
 
@@ -161,7 +202,8 @@ def crear_o_actualizar_producto():
     if not data or "sku" not in data:
         return jsonify({"error": "Datos inválidos"}), 400
 
-    doc_id = f"PROD-{data['sku'].replace(' ', '-').upper()}"
+    existente = col_productos.find_one({"sku": data["sku"]})
+    doc_id = existente["_id"] if existente else f"PROD-{data['sku'].replace(' ', '-').upper()}"
     now = datetime.now(timezone.utc)
 
     nuevo_doc = {

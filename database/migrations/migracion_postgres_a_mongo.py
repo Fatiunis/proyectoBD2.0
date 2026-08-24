@@ -1,22 +1,26 @@
+import os
 import sys
 from datetime import datetime, timezone
+from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from pymongo import MongoClient, ASCENDING
+
+load_dotenv()
 
 # ============================================================================
 # CONFIGURACIÓN DE CONEXIONES
 # ============================================================================
 PG_CONFIG = {
-    "host": "localhost",
-    "port": 5432, #CAMBIAR EL PUERTO  A 5433 MARCOS
-    "dbname": "tiendaya_db",
-    "user": "postgres",
-    "password": "1234"  #CAMBIAR LA PASSWORD!!!!
+    "host": os.getenv("PG_HOST", "localhost"),
+    "port": int(os.getenv("PG_PORT", "5432")),
+    "dbname": os.getenv("PG_DBNAME", "tiendaya_db"),
+    "user": os.getenv("PG_USER", "postgres"),
+    "password": os.getenv("PG_PASSWORD", "root")
 }
 
-MONGO_URI = "mongodb://localhost:27017/"
-MONGO_DB_NAME = "tiendaya_nosql"
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "tiendaya_nosql")
 
 
 # ============================================================================

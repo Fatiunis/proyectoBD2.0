@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TiendaYa - Panel Administrativo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"] }
+        }
+      }
+    };
+  </script>
+  <style>
+    body { font-family: "Inter", ui-sans-serif, system-ui, sans-serif; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+
+  <!-- ACCESO RESTRINGIDO: LOGIN DE ADMINISTRADOR -->
+  <div id="admin-login-gate" class="min-h-screen flex items-center justify-center p-4">
+    <section class="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 max-w-md w-full">
+      <div class="flex items-center gap-2.5 mb-6">
+        <div class="w-9 h-9 rounded-lg bg-slate-900 text-white flex items-center justify-center font-extrabold text-sm">TY</div>
+        <div>
+          <h2 class="text-lg font-extrabold text-slate-900 leading-none">Acceso administrativo</h2>
+          <p class="text-xs text-slate-400 mt-1">Solo cuentas con rol de administrador</p>
+        </div>
+      </div>
+
+      <p id="admin-login-error" class="hidden text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3 mb-4"></p>
+
+      <form onsubmit="iniciarSesionAdmin(event)" class="space-y-4">
+        <div>
+          <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Correo electrónico</label>
+          <input type="email" id="admin-login-email" required class="w-full border border-slate-300 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-slate-500 focus:border-slate-500 outline-none transition" placeholder="admin@tiendaya.com">
+        </div>
+        <div>
+          <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Contraseña</label>
+          <input type="password" id="admin-login-password" required class="w-full border border-slate-300 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-slate-500 focus:border-slate-500 outline-none transition" placeholder="••••••••">
+        </div>
+        <button type="submit" class="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg text-sm shadow-sm transition">Entrar</button>
+      </form>
+      <a href="index.html" class="block text-center text-xs text-slate-400 hover:text-slate-600 mt-5">← Volver al sitio público</a>
+    </section>
+  </div>
+
+  <!-- APP SHELL: SIDEBAR + CONTENIDO -->
+  <div id="admin-shell" class="hidden min-h-screen">
+    <aside class="fixed inset-y-0 left-0 w-60 bg-slate-900 text-slate-300 flex flex-col">
+      <div class="flex items-center gap-2.5 px-5 py-5 border-b border-slate-800">
+        <div class="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-extrabold text-sm">TY</div>
+        <div>
+          <h1 class="text-sm font-extrabold text-white leading-none">TiendaYa</h1>
+          <p class="text-[10px] text-slate-500 uppercase tracking-wider font-medium mt-0.5">Panel admin</p>
+        </div>
+      </div>
+
+      <nav class="flex-1 px-3 py-4 space-y-1">
+        <button id="admin-nav-catalogo" onclick="mostrarTabAdmin('catalogo')" class="w-full text-left px-3 py-2.5 rounded-lg text-sm font-semibold transition flex items-center gap-2.5 text-slate-300 hover:bg-slate-800 hover:text-white">
+          <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span> Catálogo
+        </button>
+        <button id="admin-nav-usuarios" onclick="mostrarTabAdmin('usuarios')" class="w-full text-left px-3 py-2.5 rounded-lg text-sm font-semibold transition flex items-center gap-2.5 text-slate-300 hover:bg-slate-800 hover:text-white">
+          <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span> Usuarios
+        </button>
+        <button id="admin-nav-historial" onclick="mostrarTabAdmin('historial')" class="w-full text-left px-3 py-2.5 rounded-lg text-sm font-semibold transition flex items-center gap-2.5 text-slate-300 hover:bg-slate-800 hover:text-white">
+          <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span> Historial
+        </button>
+      </nav>
+
+      <div class="px-4 py-4 border-t border-slate-800">
+        <div id="admin-user-info" class="text-xs font-semibold text-slate-200 mb-3 truncate"></div>
+        <div class="flex gap-2">
+          <a href="index.html" class="flex-1 text-center px-2 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-semibold transition">Sitio público</a>
+          <button onclick="cerrarSesionAdmin()" class="flex-1 px-2 py-1.5 bg-red-600/90 hover:bg-red-600 text-white rounded-lg text-xs font-semibold transition">Salir</button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="ml-60 p-8 max-w-5xl">
+
+      <!-- TAB: GESTIÓN DE CATÁLOGO -->
+      <div id="admin-tab-catalogo">
+        <h2 class="text-2xl font-extrabold text-slate-900 tracking-tight mb-1">Catálogo</h2>
+        <p class="text-sm text-slate-500 mb-6">Alta y edición de productos con atributos por categoría</p>
+
+        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 mb-6">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="text-left text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100">
+                  <th class="p-2.5">ID</th>
+                  <th class="p-2.5">Nombre</th>
+                  <th class="p-2.5">SKU</th>
+                  <th class="p-2.5">Categoría</th>
+                  <th class="p-2.5 text-right">Precio</th>
+                  <th class="p-2.5"></th>
+                </tr>
+              </thead>
+              <tbody id="admin-tabla-productos"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+          <div class="flex justify-between items-center mb-1">
+            <h3 id="form-producto-titulo" class="text-lg font-bold text-slate-900">Nuevo producto</h3>
+            <button type="button" onclick="nuevoProducto()" class="text-xs font-semibold text-indigo-600 hover:underline">+ Nuevo producto</button>
+          </div>
+          <p class="text-xs text-slate-400 mb-5">Formulario dinámico adaptable por categoría</p>
+
+          <form id="form-producto" onsubmit="guardarProducto(event)" class="space-y-4">
+            <input type="hidden" id="p-producto-id">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">SKU</label>
+                <input type="text" id="p-sku" required class="w-full border border-slate-300 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+              </div>
+              <div>
+                <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Nombre</label>
+                <input type="text" id="p-nombre" required class="w-full border border-slate-300 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Descripción</label>
+              <textarea id="p-desc" required rows="2" class="w-full border border-slate-300 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition"></textarea>
+            </div>
+
+            <div class="grid grid-cols-3 gap-4">
+              <div>
+                <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Precio (Q)</label>
+                <input type="number" step="0.01" id="p-precio" required class="w-full border border-slate-300 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+              </div>
+              <div>
+                <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Stock</label>
+                <input type="number" id="p-stock" required class="w-full border border-slate-300 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+              </div>
+              <div>
+                <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Categoría</label>
+                <select id="p-categoria" onchange="renderAtributosDinamicos()" class="w-full border border-slate-300 p-2.5 rounded-lg bg-white text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+                  <option value="laptops">Laptops</option>
+                  <option value="monitores">Monitores</option>
+                  <option value="ropa">Ropa / Playeras</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="p-4 bg-slate-50 border border-slate-200 rounded-lg">
+              <h4 class="text-xs font-bold uppercase tracking-wide text-slate-500 mb-3">Atributos polimórficos de categoría</h4>
+              <div id="contenedor-atributos-dinamicos" class="grid grid-cols-2 gap-4"></div>
+            </div>
+
+            <button type="submit" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-sm shadow-sm transition">Guardar en base documental</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- TAB: ALTA DE USUARIOS -->
+      <div id="admin-tab-usuarios" class="hidden max-w-md">
+        <h2 class="text-2xl font-extrabold text-slate-900 tracking-tight mb-1">Usuarios</h2>
+        <p class="text-sm text-slate-500 mb-6">Creación de cuentas con rol asignado en PostgreSQL</p>
+
+        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+          <form id="form-usuario" onsubmit="altaUsuario(event)" class="space-y-4">
+            <div>
+              <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Nombre completo</label>
+              <input type="text" id="u-nombre" required class="w-full border border-slate-300 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+            </div>
+            <div>
+              <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Correo electrónico</label>
+              <input type="email" id="u-email" required class="w-full border border-slate-300 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+            </div>
+            <div>
+              <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Contraseña</label>
+              <input type="password" id="u-password" required class="w-full border border-slate-300 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Rol</label>
+                <select id="u-rol" class="w-full border border-slate-300 p-2.5 rounded-lg bg-white text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+                  <option value="comprador">Comprador</option>
+                  <option value="vendedor">Vendedor</option>
+                  <option value="administrador">Administrador</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Teléfono</label>
+                <input type="text" id="u-tel" class="w-full border border-slate-300 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+              </div>
+            </div>
+            <button type="submit" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-sm shadow-sm transition">Crear usuario</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- TAB: HISTORIAL TEMPORAL -->
+      <div id="admin-tab-historial" class="hidden max-w-2xl">
+        <h2 class="text-2xl font-extrabold text-slate-900 tracking-tight mb-1">Historial temporal</h2>
+        <p class="text-sm text-slate-500 mb-6">Reconstrucción del estado de un producto (event sourcing) en cualquier punto del tiempo</p>
+
+        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+          <div class="space-y-4">
+            <div>
+              <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Producto</label>
+              <input type="text" id="h-prod-buscar" list="lista-productos-historial" autocomplete="off"
+                     oninput="actualizarProductoResuelto()" placeholder="Escribe el nombre del producto..."
+                     class="w-full border border-slate-300 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+              <datalist id="lista-productos-historial"></datalist>
+              <p id="h-prod-id-resuelto" class="text-[11px] text-slate-400 mt-1.5">Ningún producto seleccionado.</p>
+            </div>
+            <div>
+              <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Fecha y hora de corte</label>
+              <input type="datetime-local" id="h-fecha" class="w-full border border-slate-300 p-2.5 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+            </div>
+            <button onclick="consultarHistorial()" class="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg text-sm shadow-sm transition">Reconstruir estado</button>
+          </div>
+        </div>
+
+        <div id="resultado-historial" class="mt-6 hidden">
+          <div class="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+            <div class="bg-slate-900 text-white px-4 py-3 flex justify-between items-center flex-wrap gap-1">
+              <span id="h-tipo-evento" class="text-[10px] font-bold uppercase px-2 py-1 bg-white/10 rounded-full"></span>
+              <span id="h-fecha-evento" class="text-xs text-slate-300"></span>
+            </div>
+
+            <div class="p-5">
+              <div class="flex justify-between items-start gap-3 mb-1">
+                <h3 id="h-nombre-producto" class="text-lg font-bold text-slate-900"></h3>
+                <span id="h-estado-badge" class="shrink-0 text-[10px] font-bold uppercase px-2 py-0.5 rounded-full"></span>
+              </div>
+              <p id="h-precio-producto" class="text-indigo-600 font-extrabold text-xl mb-3"></p>
+              <p id="h-desc-producto" class="text-sm text-slate-600 mb-4"></p>
+
+              <div class="bg-slate-50 border border-slate-100 rounded-lg p-3.5 mb-4">
+                <h4 class="text-xs font-bold uppercase text-slate-500 mb-2">Atributos vigentes en esa fecha</h4>
+                <div id="h-atributos-grid" class="grid grid-cols-2 gap-x-4 gap-y-1"></div>
+              </div>
+
+              <div class="flex justify-between text-xs text-slate-400 border-t border-slate-100 pt-3">
+                <span>ID producto: <span id="h-producto-id-mostrado" class="font-mono text-slate-500"></span></span>
+                <span>Responsable: <span id="h-responsable" class="text-slate-500 font-medium"></span></span>
+              </div>
+            </div>
+
+            <details class="border-t border-slate-100 bg-slate-50 px-4 py-2">
+              <summary class="text-xs text-slate-500 cursor-pointer select-none">Ver JSON crudo</summary>
+              <pre id="json-historial" class="text-xs bg-slate-900 text-emerald-400 p-3 rounded-lg overflow-x-auto mt-2"></pre>
+            </details>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- NOTIFICACIONES -->
+  <div id="toast-container" class="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 items-end"></div>
+
+  <script src="js/common.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>

@@ -134,12 +134,14 @@ CREATE INDEX idx_inventario_producto ON inventario(id_producto);
 -- ============================================================================
 
 -- Usuarios
+-- Contraseña de TODOS los usuarios semilla: "Tiendaya123!" (hash real generado con werkzeug.security,
+-- el mismo mecanismo que usa backend/main.py para verificar login). Ver README.md para la tabla de credenciales.
 INSERT INTO usuarios (id_usuario, nombre, email, password_hash, rol, telefono) VALUES
-(1, 'Admin TiendaYa', 'admin@tiendaya.com', '$2b$12$e8x...hashAdmin', 'administrador', '+50255550000'),
-(2, 'TechStore Oficial', 'ventas@techstore.com', '$2b$12$e8x...hashTech', 'vendedor', '+50255551111'),
-(3, 'Moda Urbana GT', 'contacto@modaurbana.com', '$2b$12$e8x...hashModa', 'vendedor', '+50255552222'),
-(4, 'Carlos Mendez', 'carlos.mendez@email.com', '$2b$12$e8x...hashCarlos', 'comprador', '+50255553333'),
-(5, 'Sofia Lopez', 'sofia.lopez@email.com', '$2b$12$e8x...hashSofia', 'comprador', '+50255554444');
+(1, 'Admin TiendaYa', 'admin@tiendaya.com', 'scrypt:32768:8:1$qMLuQMLHIv6hRGzg$835b1fe32b5e7269d49e2db4e990cd69648bbb8c641e7e0a3e013b8100263855f5bcb271dc9a3a16894391a3c7df349f69eee34d6df24de9ea0c41d42f16ca64', 'administrador', '+50255550000'),
+(2, 'TechStore Oficial', 'ventas@techstore.com', 'scrypt:32768:8:1$9DYcJCADU22Pnqqv$b6250f6539e277cc33eb69af113d1692f4a8ea1e53bb02cccc3e17d429e1462c431e09c73170bbb9ce1e584af43e663d0e0289a8d73db0a736320bf1acdbfdab', 'vendedor', '+50255551111'),
+(3, 'Moda Urbana GT', 'contacto@modaurbana.com', 'scrypt:32768:8:1$xf0yPbhO7LzCL4CY$465b2cf24ec7637873d2fc3438248c88b3f3f25399ee9070fa700565310a1a4777e87365dbe6ddb35c7ad93fa0e91c178336f7867de170ed9862803d6cbfa508', 'vendedor', '+50255552222'),
+(4, 'Carlos Mendez', 'carlos.mendez@email.com', 'scrypt:32768:8:1$l0RSBzXnpBeu3NR2$039b0f14410920ae5bfe609d32d8208fb70a3fa8551f354ed787516e17f9f0d95723a0b19fc20597b66b59f69f24a02e8a0c0643b7e50884da65d2e0a262fbb8', 'comprador', '+50255553333'),
+(5, 'Sofia Lopez', 'sofia.lopez@email.com', 'scrypt:32768:8:1$MgSQNKe7iaQZr1WG$41352952565b99ebce1f7ebf21a9b1e5542f7313c7fa0bd68c8a1a741d206a97c8fed42111d3fb13258516d8904eb88cf2c7673d0981a6402847ff13da3cdd85', 'comprador', '+50255554444');
 
 ALTER SEQUENCE usuarios_id_usuario_seq RESTART WITH 6;
 
@@ -195,8 +197,8 @@ CREATE OR REPLACE PROCEDURE sp_procesar_checkout(
     IN p_metodo_pago VARCHAR(50),
     IN p_referencia_pago VARCHAR(100),
     IN p_items_json JSONB, -- Formato esperado: [{"id_producto": 1, "cantidad": 2}, {"id_producto": 2, "cantidad": 1}]
-    OUT p_id_pedido_generado INT,
-    OUT p_mensaje_resultado VARCHAR(255)
+    INOUT p_id_pedido_generado INT DEFAULT NULL,
+    INOUT p_mensaje_resultado VARCHAR(255) DEFAULT NULL
 )
 LANGUAGE plpgsql
 AS $$
