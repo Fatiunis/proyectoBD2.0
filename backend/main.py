@@ -3,17 +3,122 @@ from datetime import datetime, timezone
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient, ASCENDING
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 CORS(app)
 
-# Conexión a MongoDB
+# Configuración de conexiones
+PG_CONFIG = {
+    "host": "localhost",
+    "port": 5432,
+    "dbname": "tiendaya_db",
+    "user": "postgres",
+    "password": "1234"  # Ajusta a tu contraseña local
+}
+
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 client = MongoClient(MONGO_URI)
 db = client["tiendaya_nosql"]
 col_productos = db["productos"]
 col_historial = db["historial_cambios_productos"]
 
+def get_pg_connection():
+    return psycopg2.connect(**PG_CONFIG)
+
+# ============================================================================
+# MÓDULO DE AUTENTICACIÓN (POSTGRESQL - FASE INICIAL)
+# ============================================================================
+
+@app.route("/api/auth/register", methods=["POST"])
+def register():
+    data = request.get_json()
+    nombre = data.get("nombre")
+    email = data.get("email")
+    password = data.get("password")
+    rol = data.get("rol", "comprador")
+    telefono = data.get("telefono", "")
+
+    if not nombre or not email or not password:
+        return jsonify({"error": "Nombre, email y contraseña son obligatorios"}), 400
+
+    if rol not in ["comprador", "vendedor", "administrador"]:
+        return jsonify({"error": "Rol inválido"}), 400
+
+    password_hash = generate_password_hash(password)
+
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Verificar si el email ya existe
+        cur.execute("SELECT id_usuario FROM usuarios WHERE email = %s", (email,))
+        if cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "El correo electrónico ya se encuentra registrado"}), 409
+
+        # Insertar nuevo usuario
+        cur.execute(
+            """
+            INSERT INTO usuarios (nombre, email, password_hash, rol, telefono)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id_usuario, nombre, email, rol, fecha_registro;
+            """,
+            (nombre, email, password_hash, rol, telefono)
+        )
+        nuevo_usuario = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        nuevo_usuario["fecha_registro"] = nuevo_usuario["fecha_registro"].isoformat()
+        return jsonify({"mensaje": "Usuario registrado exitosamente", "usuario": nuevo_usuario}), 201
+
+    except Exception as e:
+        return jsonify({"error": f"Error en base de datos: {str(e)}"}), 500
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    email = data.get("email")
+    password = data.get("password")
+
+    if not email or not password:
+        return jsonify({"error": "Email y contraseña requeridos"}), 400
+
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT id_usuario, nombre, email, password_hash, rol FROM usuarios WHERE email = %s", (email,))
+        usuario = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not usuario or not check_password_hash(usuario["password_hash"], password):
+            return jsonify({"error": "Credenciales inválidas"}), 401
+
+        # Sesión simulada para el portal
+        return jsonify({
+            "mensaje": "Inicio de sesión exitoso",
+            "usuario": {
+                "id_usuario": usuario["id_usuario"],
+                "nombre": usuario["nombre"],
+                "email": usuario["email"],
+                "rol": usuario["rol"]
+            }
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": f"Error en base de datos: {str(e)}"}), 500
+
+
+# ============================================================================
+# MÓDULO DE CATÁLOGO & HISTORIAL (MONGODB - ENTREGA 1)
+# ============================================================================
 
 @app.route("/api/categorias", methods=["GET"])
 def get_categorias():
@@ -81,10 +186,8 @@ def crear_o_actualizar_producto():
         "ultima_actualizacion": now.isoformat()
     }
 
-    # Upsert en MongoDB
     col_productos.update_one({"_id": doc_id}, {"$set": nuevo_doc}, upsert=True)
 
-    # Event Sourcing en Historial
     evento = {
         "producto_id": doc_id,
         "tipo_evento": "ACTUALIZACION_PANEL_ADMIN",
@@ -138,7 +241,6 @@ def reconstruir_historial(producto_id):
     if not res:
         return jsonify({"error": "No existe estado registrado previo a la fecha especificada."}), 404
 
-    # Convertir datetimes a formato ISO para devolver JSON limpio
     res[0]["fecha_vigencia_evento"] = res[0]["fecha_vigencia_evento"].isoformat()
     return jsonify(res[0])
 

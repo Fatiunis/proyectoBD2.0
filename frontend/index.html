@@ -2,29 +2,105 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>TiendaYa - Catálogo NoSQL & Historial</title>
+  <title>TiendaYa - Portal E-Commerce</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-slate-100 font-sans min-h-screen">
+<body class="bg-slate-100 font-sans min-h-screen flex flex-col justify-between">
 
+  <!-- BARRA DE NAVEGACIÓN -->
   <nav class="bg-indigo-900 text-white p-4 shadow-md flex justify-between items-center">
-    <h1 class="text-2xl font-bold tracking-wide">TiendaYa · Base Documental</h1>
-    <div class="space-x-2">
-      <button onclick="mostrarVista('catalogo')" class="px-4 py-2 bg-indigo-700 hover:bg-indigo-600 rounded text-sm font-medium">Catálogo Cliente</button>
-      <button onclick="mostrarVista('admin')" class="px-4 py-2 bg-indigo-700 hover:bg-indigo-600 rounded text-sm font-medium">Panel Admin (Crear/Editar)</button>
-      <button onclick="mostrarVista('historial')" class="px-4 py-2 bg-indigo-700 hover:bg-indigo-600 rounded text-sm font-medium">Historial Temporal</button>
+    <div class="flex items-center space-x-3">
+      <h1 class="text-2xl font-bold tracking-wide">TiendaYa</h1>
+      <span class="text-xs bg-indigo-700 text-indigo-200 px-2 py-0.5 rounded uppercase font-semibold tracking-wider">Bases de Datos 2</span>
+    </div>
+
+    <!-- Menú de Navegación -->
+    <div class="flex items-center space-x-2">
+      <button onclick="mostrarVista('catalogo')" class="px-3 py-1.5 bg-indigo-800 hover:bg-indigo-700 rounded text-sm font-medium">Catálogo</button>
+      <button onclick="mostrarVista('admin')" class="px-3 py-1.5 bg-indigo-800 hover:bg-indigo-700 rounded text-sm font-medium">Panel Admin</button>
+      <button onclick="mostrarVista('historial')" class="px-3 py-1.5 bg-indigo-800 hover:bg-indigo-700 rounded text-sm font-medium">Historial Temporal</button>
+      
+      <!-- Sección Dinámica de Usuario / Auth -->
+      <div id="auth-buttons" class="flex space-x-2 ml-4 pl-4 border-l border-indigo-700">
+        <button onclick="mostrarVista('login')" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-semibold">Iniciar Sesión</button>
+        <button onclick="mostrarVista('registro')" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm font-semibold">Registrarse</button>
+      </div>
+      
+      <div id="user-profile" class="hidden items-center space-x-3 ml-4 pl-4 border-l border-indigo-700">
+        <span id="user-info" class="text-xs text-indigo-200"></span>
+        <button onclick="cerrarSesion()" class="px-2.5 py-1 bg-red-600 hover:bg-red-500 rounded text-xs font-semibold">Salir</button>
+      </div>
     </div>
   </nav>
 
-  <main class="max-w-6xl mx-auto p-6">
+  <!-- CONTENEDOR PRINCIPAL -->
+  <main class="max-w-6xl mx-auto p-6 flex-grow w-full">
 
-    <!-- SECCIÓN 1: CATÁLOGO -->
+    <!-- SECCIÓN: INICIO DE SESIÓN -->
+    <section id="vista-login" class="hidden bg-white p-8 rounded-lg shadow-md max-w-md mx-auto">
+      <h2 class="text-2xl font-bold text-slate-800 mb-1">Iniciar Sesión</h2>
+      <p class="text-xs text-slate-500 mb-6">Autenticación relacional sobre PostgreSQL</p>
+      
+      <form onsubmit="iniciarSesion(event)" class="space-y-4">
+        <div>
+          <label class="block text-xs font-bold uppercase text-slate-600 mb-1">Correo Electrónico</label>
+          <input type="email" id="login-email" required class="w-full border p-2.5 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="admin@tiendaya.com">
+        </div>
+        <div>
+          <label class="block text-xs font-bold uppercase text-slate-600 mb-1">Contraseña</label>
+          <input type="password" id="login-password" required class="w-full border p-2.5 rounded text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="••••••••">
+        </div>
+        <button type="submit" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded text-sm shadow">Entrar</button>
+      </form>
+      <p class="text-xs text-center text-slate-500 mt-4">¿No tienes cuenta? <a href="#" onclick="mostrarVista('registro')" class="text-indigo-600 font-bold hover:underline">Regístrate aquí</a></p>
+    </section>
+
+    <!-- SECCIÓN: REGISTRO DE USUARIOS -->
+    <section id="vista-registro" class="hidden bg-white p-8 rounded-lg shadow-md max-w-md mx-auto">
+      <h2 class="text-2xl font-bold text-slate-800 mb-1">Crear Cuenta</h2>
+      <p class="text-xs text-slate-500 mb-6">Alta de usuario con hash seguro en PostgreSQL</p>
+      
+      <form onsubmit="registrarUsuario(event)" class="space-y-4">
+        <div>
+          <label class="block text-xs font-bold uppercase text-slate-600 mb-1">Nombre Completo</label>
+          <input type="text" id="reg-nombre" required class="w-full border p-2.5 rounded text-sm" placeholder="Ej: Juan Pérez">
+        </div>
+        <div>
+          <label class="block text-xs font-bold uppercase text-slate-600 mb-1">Correo Electrónico</label>
+          <input type="email" id="reg-email" required class="w-full border p-2.5 rounded text-sm" placeholder="juan@ejemplo.com">
+        </div>
+        <div>
+          <label class="block text-xs font-bold uppercase text-slate-600 mb-1">Contraseña</label>
+          <input type="password" id="reg-password" required class="w-full border p-2.5 rounded text-sm" placeholder="••••••••">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-bold uppercase text-slate-600 mb-1">Rol</label>
+            <select id="reg-rol" class="w-full border p-2.5 rounded text-sm bg-white">
+              <option value="comprador">Comprador</option>
+              <option value="vendedor">Vendedor</option>
+              <option value="administrador">Administrador</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-bold uppercase text-slate-600 mb-1">Teléfono</label>
+            <input type="text" id="reg-tel" class="w-full border p-2.5 rounded text-sm" placeholder="+502...">
+          </div>
+        </div>
+        <button type="submit" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded text-sm shadow">Crear Cuenta</button>
+      </form>
+    </section>
+
+    <!-- SECCIÓN: CATÁLOGO -->
     <section id="vista-catalogo">
       <div class="flex justify-between items-center mb-6">
-        <h2 class="text-xl font-bold text-slate-800">Catálogo de Productos con Atributos Heterogéneos</h2>
+        <div>
+          <h2 class="text-xl font-bold text-slate-800">Catálogo de Productos</h2>
+          <p class="text-xs text-slate-500">Documentos polimórficos estructurados en MongoDB</p>
+        </div>
         <div class="flex items-center space-x-2">
-          <label class="text-sm font-medium text-slate-600">Filtrar Categoría:</label>
-          <select id="filtro-categoria" onchange="cargarProductos()" class="p-2 border rounded bg-white shadow-sm">
+          <label class="text-sm font-medium text-slate-600">Categoría:</label>
+          <select id="filtro-categoria" onchange="cargarProductos()" class="p-2 border rounded bg-white shadow-sm text-sm">
             <option value="">Todas las Categorías</option>
             <option value="2">Laptops (Tecnología)</option>
             <option value="3">Monitores (Tecnología)</option>
@@ -35,38 +111,40 @@
       <div id="grid-productos" class="grid grid-cols-1 md:grid-cols-3 gap-6"></div>
     </section>
 
-    <!-- SECCIÓN 2: FORMULARIO DINÁMICO ADMIN -->
+    <!-- SECCIÓN: PANEL ADMIN -->
     <section id="vista-admin" class="hidden bg-white p-6 rounded-lg shadow-md max-w-2xl mx-auto">
-      <h2 class="text-xl font-bold text-slate-800 mb-4">Gestión de Catálogo (Formulario Polimórfico)</h2>
+      <h2 class="text-xl font-bold text-slate-800 mb-1">Gestión de Catálogo</h2>
+      <p class="text-xs text-slate-500 mb-4">Formulario dinámico adaptable por categoría</p>
+      
       <form id="form-producto" onsubmit="guardarProducto(event)" class="space-y-4">
         <div class="grid grid-cols-2 gap-4">
           <div>
             <label class="block text-xs font-bold uppercase text-slate-500 mb-1">SKU</label>
-            <input type="text" id="p-sku" required class="w-full border p-2 rounded">
+            <input type="text" id="p-sku" required class="w-full border p-2 rounded text-sm">
           </div>
           <div>
             <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Nombre</label>
-            <input type="text" id="p-nombre" required class="w-full border p-2 rounded">
+            <input type="text" id="p-nombre" required class="w-full border p-2 rounded text-sm">
           </div>
         </div>
 
         <div>
           <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Descripción</label>
-          <textarea id="p-desc" required class="w-full border p-2 rounded rows-2"></textarea>
+          <textarea id="p-desc" required class="w-full border p-2 rounded rows-2 text-sm"></textarea>
         </div>
 
         <div class="grid grid-cols-3 gap-4">
           <div>
             <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Precio (Q)</label>
-            <input type="number" step="0.01" id="p-precio" required class="w-full border p-2 rounded">
+            <input type="number" step="0.01" id="p-precio" required class="w-full border p-2 rounded text-sm">
           </div>
           <div>
             <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Stock</label>
-            <input type="number" id="p-stock" required class="w-full border p-2 rounded">
+            <input type="number" id="p-stock" required class="w-full border p-2 rounded text-sm">
           </div>
           <div>
             <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Categoría</label>
-            <select id="p-categoria" onchange="renderAtributosDinamicos()" class="w-full border p-2 rounded bg-white">
+            <select id="p-categoria" onchange="renderAtributosDinamicos()" class="w-full border p-2 rounded bg-white text-sm">
               <option value="laptops">Laptops</option>
               <option value="monitores">Monitores</option>
               <option value="ropa">Ropa / Playeras</option>
@@ -74,51 +152,135 @@
           </div>
         </div>
 
-        <!-- Atributos Dinámicos Heterogéneos -->
         <div class="p-4 bg-slate-50 border border-slate-200 rounded">
-          <h3 class="text-sm font-bold text-slate-700 mb-2">Atributos Específicos de Categoría</h3>
+          <h3 class="text-xs font-bold uppercase tracking-wider text-slate-600 mb-3">Atributos Polimórficos de Categoría</h3>
           <div id="contenedor-atributos-dinamicos" class="grid grid-cols-2 gap-4"></div>
         </div>
 
-        <button type="submit" class="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded">Guardar en Base Documental</button>
+        <button type="submit" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded text-sm">Guardar en Base Documental</button>
       </form>
     </section>
 
-    <!-- SECCIÓN 3: HISTORIAL DE CAMBIOS (POINT-IN-TIME) -->
+    <!-- SECCIÓN: HISTORIAL POINT-IN-TIME -->
     <section id="vista-historial" class="hidden bg-white p-6 rounded-lg shadow-md max-w-2xl mx-auto">
-      <h2 class="text-xl font-bold text-slate-800 mb-4">Reconstrucción Temporal de Producto</h2>
+      <h2 class="text-xl font-bold text-slate-800 mb-1">Reconstrucción Temporal (Event Sourcing)</h2>
+      <p class="text-xs text-slate-500 mb-4">Consulta el estado exacto de un producto en cualquier punto del tiempo</p>
+      
       <div class="space-y-4">
         <div>
           <label class="block text-xs font-bold uppercase text-slate-500 mb-1">ID Producto</label>
-          <input type="text" id="h-prod-id" value="PROD-0001" placeholder="Ej: PROD-0001" class="w-full border p-2 rounded">
+          <input type="text" id="h-prod-id" value="PROD-0001" placeholder="Ej: PROD-0001" class="w-full border p-2 rounded text-sm">
         </div>
         <div>
-          <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Fecha y Hora de Corte (Cualquier punto en el tiempo)</label>
-          <input type="datetime-local" id="h-fecha" class="w-full border p-2 rounded">
+          <label class="block text-xs font-bold uppercase text-slate-500 mb-1">Fecha y Hora de Corte</label>
+          <input type="datetime-local" id="h-fecha" class="w-full border p-2 rounded text-sm">
         </div>
-        <button onclick="consultarHistorial()" class="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded">Reconstruir Estado</button>
+        <button onclick="consultarHistorial()" class="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded text-sm">Reconstruir Estado</button>
       </div>
 
       <div id="resultado-historial" class="mt-6 hidden p-4 bg-slate-50 border rounded">
-        <h3 class="font-bold text-indigo-900 border-b pb-1 mb-2">Estado Vigente Reconstruido</h3>
+        <h3 class="font-bold text-indigo-900 border-b pb-1 mb-2 text-sm">Estado Vigente Reconstruido</h3>
         <pre id="json-historial" class="text-xs bg-slate-900 text-emerald-400 p-4 rounded overflow-x-auto"></pre>
       </div>
     </section>
 
   </main>
 
+  <footer class="bg-slate-800 text-slate-400 text-xs py-4 text-center">
+    TiendaYa · Portal E-Commerce con Arquitectura Políglota (PostgreSQL + MongoDB)
+  </footer>
+
   <script>
     const API_URL = "http://127.0.0.1:8000/api";
+    let sesionActual = JSON.parse(localStorage.getItem("usuario_tiendaya")) || null;
+
+    function actualizarInterfazAuth() {
+      const authBtns = document.getElementById("auth-buttons");
+      const userProf = document.getElementById("user-profile");
+      const userInfo = document.getElementById("user-info");
+
+      if (sesionActual) {
+        authBtns.classList.add("hidden");
+        userProf.classList.remove("hidden");
+        userProf.classList.add("flex");
+        userInfo.innerHTML = `<strong>${sesionActual.nombre}</strong> (${sesionActual.rol})`;
+      } else {
+        authBtns.classList.remove("hidden");
+        userProf.classList.add("hidden");
+        userProf.classList.remove("flex");
+      }
+    }
 
     function mostrarVista(vista) {
       document.getElementById("vista-catalogo").classList.add("hidden");
       document.getElementById("vista-admin").classList.add("hidden");
       document.getElementById("vista-historial").classList.add("hidden");
+      document.getElementById("vista-login").classList.add("hidden");
+      document.getElementById("vista-registro").classList.add("hidden");
+      
       document.getElementById(`vista-${vista}`).classList.remove("hidden");
       if (vista === 'catalogo') cargarProductos();
       if (vista === 'admin') renderAtributosDinamicos();
     }
 
+    // --- AUTENTICACIÓN ---
+    async function iniciarSesion(e) {
+      e.preventDefault();
+      const email = document.getElementById("login-email").value;
+      const password = document.getElementById("login-password").value;
+
+      const res = await fetch(`${API_URL}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        sesionActual = data.usuario;
+        localStorage.setItem("usuario_tiendaya", JSON.stringify(sesionActual));
+        actualizarInterfazAuth();
+        alert(`¡Bienvenido/a, ${sesionActual.nombre}!`);
+        mostrarVista('catalogo');
+      } else {
+        alert(`Error: ${data.error}`);
+      }
+    }
+
+    async function registrarUsuario(e) {
+      e.preventDefault();
+      const payload = {
+        nombre: document.getElementById("reg-nombre").value,
+        email: document.getElementById("reg-email").value,
+        password: document.getElementById("reg-password").value,
+        rol: document.getElementById("reg-rol").value,
+        telefono: document.getElementById("reg-tel").value
+      };
+
+      const res = await fetch(`${API_URL}/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        alert("Usuario registrado con éxito en PostgreSQL. Ahora puedes iniciar sesión.");
+        mostrarVista('login');
+      } else {
+        alert(`Error: ${data.error}`);
+      }
+    }
+
+    function cerrarSesion() {
+      sesionActual = null;
+      localStorage.removeItem("usuario_tiendaya");
+      actualizarInterfazAuth();
+      alert("Sesión cerrada.");
+      mostrarVista('catalogo');
+    }
+
+    // --- CATÁLOGO & PRODUCTOS ---
     async function cargarProductos() {
       const cat = document.getElementById("filtro-categoria").value;
       const url = cat ? `${API_URL}/productos?categoria_id=${cat}` : `${API_URL}/productos`;
@@ -142,7 +304,7 @@
               <span class="text-[10px] font-bold uppercase px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded">${p.categoria.nombre}</span>
               <h3 class="font-bold text-slate-800 text-lg mt-1">${p.nombre}</h3>
               <p class="text-indigo-600 font-extrabold text-xl my-2">Q${p.precio_base.toFixed(2)}</p>
-              <div class="bg-slate-50 p-2 rounded border border-slate-100 space-y-1 mb-2">
+              <div class="bg-slate-50 p-2.5 rounded border border-slate-100 space-y-1 mb-2">
                 ${atributosHtml}
               </div>
             </div>
@@ -159,10 +321,10 @@
 
       if (cat === "laptops") {
         c.innerHTML = `
-          <div><label class="text-xs font-medium">Procesador</label><input type="text" id="attr-cpu" class="w-full border p-1 rounded text-sm" value="Intel i7 13th Gen"></div>
-          <div><label class="text-xs font-medium">RAM (GB)</label><input type="number" id="attr-ram" class="w-full border p-1 rounded text-sm" value="16"></div>
-          <div><label class="text-xs font-medium">Almacenamiento (GB)</label><input type="number" id="attr-ssd" class="w-full border p-1 rounded text-sm" value="512"></div>
-          <div><label class="text-xs font-medium">Pantalla (Hz)</label><input type="number" id="attr-hz" class="w-full border p-1 rounded text-sm" value="144"></div>
+          <div><label class="text-xs font-medium">Procesador</label><input type="text" id="attr-cpu" class="w-full border p-1 rounded text-sm" value="AMD Ryzen 9 8940HX"></div>
+          <div><label class="text-xs font-medium">RAM (GB)</label><input type="number" id="attr-ram" class="w-full border p-1 rounded text-sm" value="32"></div>
+          <div><label class="text-xs font-medium">Almacenamiento (GB)</label><input type="number" id="attr-ssd" class="w-full border p-1 rounded text-sm" value="1000"></div>
+          <div><label class="text-xs font-medium">Pantalla (Hz)</label><input type="number" id="attr-hz" class="w-full border p-1 rounded text-sm" value="180"></div>
         `;
       } else if (cat === "monitores") {
         c.innerHTML = `
@@ -219,8 +381,8 @@
         stock_disponible: parseInt(document.getElementById("p-stock").value),
         id_categoria: catId,
         nombre_categoria: catNombre,
-        id_vendedor: 2,
-        nombre_vendedor: "TechStore Oficial",
+        id_vendedor: sesionActual ? sesionActual.id_usuario : 2,
+        nombre_vendedor: sesionActual ? sesionActual.nombre : "TechStore Oficial",
         atributos: atributos
       };
 
@@ -231,7 +393,7 @@
       });
 
       if (res.ok) {
-        alert("¡Producto guardado y evento de cambio registrado!");
+        alert("¡Producto guardado y evento de cambio registrado en MongoDB!");
         mostrarVista('catalogo');
       }
     }
@@ -256,12 +418,12 @@
         divRes.classList.remove("hidden");
       } else {
         const err = await res.json();
-        alert(`Error: ${err.detail}`);
+        alert(`Error: ${err.error || err.detail}`);
         divRes.classList.add("hidden");
       }
     }
 
-    // Inicialización por defecto
+    actualizarInterfazAuth();
     mostrarVista('catalogo');
   </script>
 </body>
