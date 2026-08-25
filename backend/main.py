@@ -222,13 +222,79 @@ def procesar_checkout():
 
 @app.route("/api/categorias", methods=["GET"])
 def get_categorias():
-    pipeline = [
-        {"$group": {"_id": "$categoria.id_categoria", "nombre": {"$first": "$categoria.nombre"}}},
-        {"$project": {"_id": 0, "id_categoria": "$_id", "nombre": 1}},
-        {"$sort": {"nombre": 1}}
-    ]
-    categorias = list(col_productos.aggregate(pipeline))
-    return jsonify(categorias)
+    """
+    Fuente de verdad: PostgreSQL (tabla "categorias"), no una agregación sobre
+    los productos de Mongo. Así una categoría recién creada por el administrador
+    aparece de inmediato en el catálogo y en el formulario de alta de producto,
+    aunque todavía no tenga ningún producto asociado.
+    """
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT id_categoria, nombre_categoria AS nombre, descripcion,
+                   id_categoria_padre, esquema_atributos
+            FROM categorias
+            ORDER BY nombre_categoria;
+            """
+        )
+        categorias = cur.fetchall()
+        cur.close()
+        conn.close()
+        return jsonify(categorias)
+    except Exception as e:
+        return jsonify({"error": f"Error en base de datos: {str(e)}"}), 500
+
+
+@app.route("/api/categorias", methods=["POST"])
+def crear_categoria():
+    data = request.get_json() or {}
+
+    if data.get("rol_solicitante") != "administrador":
+        return jsonify({"error": "Solo un administrador puede crear categorías."}), 403
+
+    nombre = (data.get("nombre") or "").strip()
+    if not nombre:
+        return jsonify({"error": "El nombre de la categoría es obligatorio"}), 400
+
+    descripcion = data.get("descripcion", "")
+    id_categoria_padre = data.get("id_categoria_padre") or None
+    esquema_atributos = data.get("esquema_atributos", [])
+
+    if not isinstance(esquema_atributos, list) or any(
+        not isinstance(a, dict) or not a.get("clave") or not a.get("etiqueta") or a.get("tipo") not in ["texto", "numero"]
+        for a in esquema_atributos
+    ):
+        return jsonify({"error": "esquema_atributos inválido: cada atributo necesita clave, etiqueta y tipo ('texto' o 'numero')"}), 400
+
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT id_categoria FROM categorias WHERE nombre_categoria = %s", (nombre,))
+        if cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Ya existe una categoría con ese nombre"}), 409
+
+        cur.execute(
+            """
+            INSERT INTO categorias (nombre_categoria, descripcion, id_categoria_padre, esquema_atributos)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id_categoria, nombre_categoria AS nombre, descripcion,
+                      id_categoria_padre, esquema_atributos;
+            """,
+            (nombre, descripcion, id_categoria_padre, Json(esquema_atributos))
+        )
+        nueva = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"mensaje": "Categoría creada con éxito", "categoria": nueva}), 201
+    except psycopg2.Error as e:
+        return jsonify({"error": e.diag.message_primary or str(e).strip()}), 400
+    except Exception as e:
+        return jsonify({"error": f"Error en base de datos: {str(e)}"}), 500
 
 
 @app.route("/api/categorias/<int:id_categoria>/filtros", methods=["GET"])

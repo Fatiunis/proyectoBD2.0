@@ -33,6 +33,20 @@ function mostrarVista(vista) {
   if (vista === "catalogo") cargarProductos();
 }
 
+// Puebla el filtro de categoría desde PostgreSQL (fuente de verdad de la taxonomía),
+// no desde una lista fija en el frontend, así una categoría nueva del administrador
+// aparece aquí sin tocar código. Se excluyen las categorías "contenedoras" (sin
+// atributos propios, ej. "Tecnología") porque ningún producto se asigna a ellas
+// directamente — solo a sus subcategorías (Laptops, Monitores, Zapatos, etc.).
+async function cargarOpcionesCategoria() {
+  const { data: categorias } = await apiFetch("/categorias");
+  const asignables = (categorias || []).filter(c => (c.esquema_atributos || []).length > 0);
+
+  const sel = document.getElementById("filtro-categoria");
+  sel.innerHTML = '<option value="">Todas las categorías</option>' +
+    asignables.map(c => `<option value="${c.id_categoria}">${c.nombre}</option>`).join("");
+}
+
 // --- AUTENTICACIÓN (clientes) ---
 async function iniciarSesion(e) {
   e.preventDefault();
@@ -256,4 +270,5 @@ function cerrarDetalle(e) {
 }
 
 actualizarInterfazAuth();
+cargarOpcionesCategoria();
 mostrarVista("catalogo");

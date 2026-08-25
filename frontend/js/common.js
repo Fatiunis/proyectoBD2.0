@@ -25,19 +25,6 @@ async function apiFetch(path, opts = {}) {
   return { ok: res.ok, status: res.status, data };
 }
 
-const CATEGORIAS_FORM = {
-  laptops: { id_categoria: 2, nombre_categoria: "Laptops" },
-  monitores: { id_categoria: 3, nombre_categoria: "Monitores" },
-  ropa: { id_categoria: 5, nombre_categoria: "Playeras" }
-};
-
-function idCategoriaAFormValue(id) {
-  for (const [clave, info] of Object.entries(CATEGORIAS_FORM)) {
-    if (info.id_categoria === id) return clave;
-  }
-  return "laptops";
-}
-
 // --- Miniaturas ilustradas por categoría (las URLs de imagen de la semilla apuntan a un CDN ficticio) ---
 const ICONOS_SVG = {
   laptop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M2 18h20l-1.4 2.3a1 1 0 0 1-.86.7H4.26a1 1 0 0 1-.86-.7L2 18z"/></svg>',

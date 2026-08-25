@@ -44,12 +44,19 @@ CREATE TABLE direcciones (
 );
 
 -- Tabla: categorias (Estructura jerárquica auto-referenciada)
+-- "esquema_atributos" define, por categoría, qué atributos captura el formulario de
+-- alta de producto (clave, etiqueta visible y tipo de dato). Se mantiene relacional
+-- porque la taxonomía de categorías es un catálogo controlado por el administrador,
+-- de bajo volumen y con integridad referencial hacia productos.id_categoria; JSONB
+-- permite que cada categoría tenga una lista de atributos de tamaño y forma libres
+-- sin necesitar una migración de esquema por cada categoría nueva.
 CREATE TABLE categorias (
     id_categoria SERIAL PRIMARY KEY,
     nombre_categoria VARCHAR(100) NOT NULL UNIQUE,
     descripcion TEXT,
     id_categoria_padre INT,
-    CONSTRAINT fk_categoria_padre FOREIGN KEY (id_categoria_padre) 
+    esquema_atributos JSONB NOT NULL DEFAULT '[]'::jsonb,
+    CONSTRAINT fk_categoria_padre FOREIGN KEY (id_categoria_padre)
         REFERENCES categorias(id_categoria) ON DELETE SET NULL
 );
 
@@ -153,12 +160,31 @@ INSERT INTO direcciones (id_direccion, id_usuario, direccion_linea1, ciudad, dep
 ALTER SEQUENCE direcciones_id_direccion_seq RESTART WITH 3;
 
 -- Categorías
-INSERT INTO categorias (id_categoria, nombre_categoria, descripcion, id_categoria_padre) VALUES
-(1, 'Tecnología', 'Equipos de computación, periféricos y electrónica', NULL),
-(2, 'Laptops', 'Laptops gamers, de oficina y ultrabooks', 1),
-(3, 'Monitores', 'Monitores de alta tasa de refresco y productividad', 1),
-(4, 'Moda y Ropa', 'Vestuario para damas y caballeros', NULL),
-(5, 'Playeras', 'Playeras casuales y de diseño', 4);
+INSERT INTO categorias (id_categoria, nombre_categoria, descripcion, id_categoria_padre, esquema_atributos) VALUES
+(1, 'Tecnología', 'Equipos de computación, periféricos y electrónica', NULL, '[]'::jsonb),
+(2, 'Laptops', 'Laptops gamers, de oficina y ultrabooks', 1, '[
+    {"clave": "procesador", "etiqueta": "Procesador", "tipo": "texto"},
+    {"clave": "memoria_ram_gb", "etiqueta": "RAM (GB)", "tipo": "numero"},
+    {"clave": "almacenamiento_ssd_gb", "etiqueta": "Almacenamiento SSD (GB)", "tipo": "numero"},
+    {"clave": "tarjeta_grafica", "etiqueta": "Tarjeta gráfica", "tipo": "texto"},
+    {"clave": "tasa_refresco_hz", "etiqueta": "Tasa de refresco (Hz)", "tipo": "numero"},
+    {"clave": "tamano_pantalla_pulgadas", "etiqueta": "Tamaño de pantalla (pulgadas)", "tipo": "numero"}
+]'::jsonb),
+(3, 'Monitores', 'Monitores de alta tasa de refresco y productividad', 1, '[
+    {"clave": "tamano_pantalla_pulgadas", "etiqueta": "Tamaño (pulgadas)", "tipo": "numero"},
+    {"clave": "tipo_panel", "etiqueta": "Tipo de panel", "tipo": "texto"},
+    {"clave": "resolucion", "etiqueta": "Resolución", "tipo": "texto"},
+    {"clave": "tasa_refresco_hz", "etiqueta": "Tasa de refresco (Hz)", "tipo": "numero"},
+    {"clave": "tiempo_respuesta_ms", "etiqueta": "Tiempo de respuesta (ms)", "tipo": "numero"}
+]'::jsonb),
+(4, 'Moda y Ropa', 'Vestuario para damas y caballeros', NULL, '[]'::jsonb),
+(5, 'Playeras', 'Playeras casuales y de diseño', 4, '[
+    {"clave": "talla", "etiqueta": "Talla", "tipo": "texto"},
+    {"clave": "color", "etiqueta": "Color", "tipo": "texto"},
+    {"clave": "material", "etiqueta": "Material", "tipo": "texto"},
+    {"clave": "corte", "etiqueta": "Corte", "tipo": "texto"},
+    {"clave": "instrucciones_lavado", "etiqueta": "Instrucciones de lavado", "tipo": "texto"}
+]'::jsonb);
 
 ALTER SEQUENCE categorias_id_categoria_seq RESTART WITH 6;
 

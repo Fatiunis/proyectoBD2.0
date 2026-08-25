@@ -10,8 +10,10 @@ function actualizarAccesoAdmin() {
     const esVendedor = sesionAdmin.rol === "vendedor";
     document.getElementById("admin-user-info").textContent = `${sesionAdmin.nombre} · ${sesionAdmin.rol}`;
 
-    // Los vendedores solo administran su propio catálogo y ventas; "Usuarios" es exclusivo del administrador.
+    // Los vendedores solo administran su propio catálogo y ventas; "Usuarios" y "Categorías"
+    // son exclusivos del administrador (la taxonomía del catálogo es una decisión centralizada).
     document.getElementById("admin-nav-usuarios").classList.toggle("hidden", esVendedor);
+    document.getElementById("admin-nav-categorias").classList.toggle("hidden", esVendedor);
     document.getElementById("admin-nav-ventas").classList.toggle("hidden", !esVendedor);
     document.getElementById("admin-nav-ventas").classList.toggle("flex", esVendedor);
     document.getElementById("admin-nav-catalogo-label").textContent = esVendedor ? "Mi catálogo" : "Catálogo";
@@ -56,15 +58,19 @@ function cerrarSesionAdmin() {
 }
 
 function mostrarTabAdmin(tab) {
-  ["catalogo", "ventas", "usuarios", "historial"].forEach(t => {
+  ["catalogo", "ventas", "categorias", "usuarios", "historial"].forEach(t => {
     document.getElementById(`admin-tab-${t}`).classList.toggle("hidden", t !== tab);
     const btn = document.getElementById(`admin-nav-${t}`);
     btn.classList.toggle("bg-indigo-600", t === tab);
     btn.classList.toggle("text-white", t === tab);
     btn.classList.toggle("text-slate-300", t !== tab);
   });
-  if (tab === "catalogo") cargarTablaProductos();
+  if (tab === "catalogo") {
+    cargarCategoriasEnSelectProducto().then(() => nuevoProducto());
+    cargarTablaProductos();
+  }
   if (tab === "ventas") cargarMisVentas();
+  if (tab === "categorias") cargarTablaCategorias();
   if (tab === "usuarios") cargarTablaUsuarios();
   if (tab === "historial") cargarSelectorProductosHistorial();
 }
@@ -146,6 +152,24 @@ async function cargarMisVentas() {
   });
 }
 
+// Categorías disponibles (id_categoria, nombre, esquema_atributos) para el formulario
+// de producto. Se cargan desde PostgreSQL vía GET /categorias — ninguna categoría ni
+// atributo está hardcodeado en el frontend, así que una categoría nueva creada por el
+// administrador queda disponible aquí de inmediato.
+let categoriasCache = [];
+
+async function cargarCategoriasEnSelectProducto() {
+  const { data } = await apiFetch("/categorias");
+  categoriasCache = data || [];
+
+  const sel = document.getElementById("p-categoria");
+  const valorPrevio = sel.value;
+  sel.innerHTML = categoriasCache.map(c => `<option value="${c.id_categoria}">${c.nombre}</option>`).join("");
+  if (valorPrevio && categoriasCache.some(c => String(c.id_categoria) === valorPrevio)) {
+    sel.value = valorPrevio;
+  }
+}
+
 function nuevoProducto() {
   document.getElementById("form-producto").reset();
   document.getElementById("p-producto-id").value = "";
@@ -167,76 +191,55 @@ async function cargarProductoParaEditar(id) {
   document.getElementById("p-desc").value = p.descripcion;
   document.getElementById("p-precio").value = p.precio_base;
   document.getElementById("p-stock").value = p.stock_disponible ?? 0;
-  document.getElementById("p-categoria").value = idCategoriaAFormValue(p.categoria.id_categoria);
+  document.getElementById("p-categoria").value = p.categoria.id_categoria;
   renderAtributosDinamicos(p.atributos || {});
 
   document.getElementById("form-producto").scrollIntoView({ behavior: "smooth" });
 }
 
 function renderAtributosDinamicos(existentes = {}) {
-  const cat = document.getElementById("p-categoria").value;
+  const idCategoria = parseInt(document.getElementById("p-categoria").value);
+  const categoria = categoriasCache.find(c => c.id_categoria === idCategoria);
   const c = document.getElementById("contenedor-atributos-dinamicos");
-  c.innerHTML = "";
 
-  if (cat === "laptops") {
-    c.innerHTML = `
-      <div><label class="text-xs font-medium">Procesador</label><input type="text" id="attr-cpu" class="w-full border p-1 rounded text-sm" value="${existentes.procesador ?? "AMD Ryzen 9 8940HX"}"></div>
-      <div><label class="text-xs font-medium">RAM (GB)</label><input type="number" id="attr-ram" class="w-full border p-1 rounded text-sm" value="${existentes.memoria_ram_gb ?? 32}"></div>
-      <div><label class="text-xs font-medium">Almacenamiento (GB)</label><input type="number" id="attr-ssd" class="w-full border p-1 rounded text-sm" value="${existentes.almacenamiento_ssd_gb ?? 1000}"></div>
-      <div><label class="text-xs font-medium">Pantalla (Hz)</label><input type="number" id="attr-hz" class="w-full border p-1 rounded text-sm" value="${existentes.tasa_refresco_hz ?? 180}"></div>
-    `;
-  } else if (cat === "monitores") {
-    c.innerHTML = `
-      <div><label class="text-xs font-medium">Pulgadas</label><input type="number" id="attr-pulgadas" class="w-full border p-1 rounded text-sm" value="${existentes.tamano_pulgadas ?? 27}"></div>
-      <div><label class="text-xs font-medium">Panel</label><input type="text" id="attr-panel" class="w-full border p-1 rounded text-sm" value="${existentes.tipo_panel ?? "IPS"}"></div>
-      <div><label class="text-xs font-medium">Resolución</label><input type="text" id="attr-res" class="w-full border p-1 rounded text-sm" value="${existentes.resolucion ?? "1920x1080"}"></div>
-      <div><label class="text-xs font-medium">Tasa Refresco (Hz)</label><input type="number" id="attr-hz-mon" class="w-full border p-1 rounded text-sm" value="${existentes.tasa_refresco_hz ?? 180}"></div>
-    `;
-  } else if (cat === "ropa") {
-    c.innerHTML = `
-      <div><label class="text-xs font-medium">Talla</label><input type="text" id="attr-talla" class="w-full border p-1 rounded text-sm" value="${existentes.talla ?? "M"}"></div>
-      <div><label class="text-xs font-medium">Color</label><input type="text" id="attr-color" class="w-full border p-1 rounded text-sm" value="${existentes.color ?? "Negro"}"></div>
-      <div><label class="text-xs font-medium">Material</label><input type="text" id="attr-mat" class="w-full border p-1 rounded text-sm" value="${existentes.material ?? "100% Algodón"}"></div>
-    `;
+  const esquema = categoria ? (categoria.esquema_atributos || []) : [];
+  if (esquema.length === 0) {
+    c.innerHTML = `<p class="text-xs text-slate-400 col-span-2">Esta categoría todavía no tiene atributos configurados. Agrégalos desde la pestaña "Categorías".</p>`;
+    return;
   }
+
+  c.innerHTML = esquema.map(attr => {
+    const valor = existentes[attr.clave] ?? "";
+    const tipoInput = attr.tipo === "numero" ? "number" : "text";
+    return `
+      <div>
+        <label class="text-xs font-medium">${attr.etiqueta}</label>
+        <input type="${tipoInput}" ${attr.tipo === "numero" ? 'step="any"' : ""} id="attr-${attr.clave}" class="w-full border p-1 rounded text-sm" value="${valor}">
+      </div>
+    `;
+  }).join("");
 }
 
 async function guardarProducto(e) {
   e.preventDefault();
-  const cat = document.getElementById("p-categoria").value;
-  let atributos = {};
+  const idCategoria = parseInt(document.getElementById("p-categoria").value);
+  const categoria = categoriasCache.find(c => c.id_categoria === idCategoria);
 
-  if (cat === "laptops") {
-    atributos = {
-      procesador: document.getElementById("attr-cpu").value,
-      memoria_ram_gb: parseInt(document.getElementById("attr-ram").value),
-      almacenamiento_ssd_gb: parseInt(document.getElementById("attr-ssd").value),
-      tasa_refresco_hz: parseInt(document.getElementById("attr-hz").value)
-    };
-  } else if (cat === "monitores") {
-    atributos = {
-      tamano_pulgadas: parseFloat(document.getElementById("attr-pulgadas").value),
-      tipo_panel: document.getElementById("attr-panel").value,
-      resolucion: document.getElementById("attr-res").value,
-      tasa_refresco_hz: parseInt(document.getElementById("attr-hz-mon").value)
-    };
-  } else {
-    atributos = {
-      talla: document.getElementById("attr-talla").value,
-      color: document.getElementById("attr-color").value,
-      material: document.getElementById("attr-mat").value
-    };
-  }
+  const atributos = {};
+  (categoria ? categoria.esquema_atributos : []).forEach(attr => {
+    const input = document.getElementById(`attr-${attr.clave}`);
+    if (!input) return;
+    atributos[attr.clave] = attr.tipo === "numero" ? parseFloat(input.value) : input.value;
+  });
 
-  const info = CATEGORIAS_FORM[cat];
   const payload = {
     sku: document.getElementById("p-sku").value,
     nombre: document.getElementById("p-nombre").value,
     descripcion: document.getElementById("p-desc").value,
     precio_base: parseFloat(document.getElementById("p-precio").value),
     stock_disponible: parseInt(document.getElementById("p-stock").value),
-    id_categoria: info.id_categoria,
-    nombre_categoria: info.nombre_categoria,
+    id_categoria: idCategoria,
+    nombre_categoria: categoria ? categoria.nombre : "General",
     id_vendedor: sesionAdmin.id_usuario,
     nombre_vendedor: sesionAdmin.nombre,
     rol_solicitante: sesionAdmin.rol,
@@ -254,6 +257,92 @@ async function guardarProducto(e) {
     cargarTablaProductos();
   } else {
     toast(data.error || "No se pudo guardar el producto.", "error");
+  }
+}
+
+// --- ADMINISTRACIÓN DE CATEGORÍAS ---
+async function cargarTablaCategorias() {
+  const { ok, data: categorias } = await apiFetch("/categorias");
+  if (!ok) {
+    toast(categorias.error || "No se pudieron cargar las categorías.", "error");
+    return;
+  }
+  categoriasCache = categorias;
+
+  const tbody = document.getElementById("admin-tabla-categorias");
+  tbody.innerHTML = categorias.map(c => {
+    const chips = (c.esquema_atributos || []).map(a =>
+      `<span class="inline-block mr-1 mb-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[10px] font-semibold">${a.etiqueta}</span>`
+    ).join("");
+    return `
+      <tr class="border-b border-slate-50 hover:bg-slate-50/80 transition align-top">
+        <td class="p-2.5 text-slate-400 font-mono text-xs">${c.id_categoria}</td>
+        <td class="p-2.5 font-medium text-slate-800">${c.nombre}</td>
+        <td class="p-2.5 text-slate-500 text-xs">${c.descripcion || "—"}</td>
+        <td class="p-2.5">${chips || '<span class="text-xs text-slate-400">Sin atributos</span>'}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const selPadre = document.getElementById("cat-padre");
+  selPadre.innerHTML = '<option value="">Ninguna</option>' +
+    categorias.map(c => `<option value="${c.id_categoria}">${c.nombre}</option>`).join("");
+
+  if (document.getElementById("categoria-atributos-filas").children.length === 0) {
+    agregarFilaAtributoCategoria();
+  }
+}
+
+function agregarFilaAtributoCategoria() {
+  const cont = document.getElementById("categoria-atributos-filas");
+  const fila = document.createElement("div");
+  fila.className = "grid grid-cols-[1fr_1fr_110px_28px] gap-2 items-center";
+  fila.innerHTML = `
+    <input type="text" placeholder="ej. talla_zapato" class="cat-attr-clave border border-slate-300 p-1.5 rounded text-xs font-mono focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+    <input type="text" placeholder="ej. Talla" class="cat-attr-etiqueta border border-slate-300 p-1.5 rounded text-xs focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+    <select class="cat-attr-tipo border border-slate-300 p-1.5 rounded text-xs bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+      <option value="texto">Texto</option>
+      <option value="numero">Número</option>
+    </select>
+    <button type="button" onclick="this.closest('.grid').remove()" class="text-red-400 hover:text-red-600 text-sm font-bold" title="Quitar atributo">✕</button>
+  `;
+  cont.appendChild(fila);
+}
+
+function leerAtributosDelFormularioCategoria() {
+  const filas = document.querySelectorAll("#categoria-atributos-filas > div");
+  const atributos = [];
+  filas.forEach(fila => {
+    const clave = fila.querySelector(".cat-attr-clave").value.trim();
+    const etiqueta = fila.querySelector(".cat-attr-etiqueta").value.trim();
+    const tipo = fila.querySelector(".cat-attr-tipo").value;
+    if (clave && etiqueta) atributos.push({ clave, etiqueta, tipo });
+  });
+  return atributos;
+}
+
+async function crearCategoria(e) {
+  e.preventDefault();
+  const payload = {
+    nombre: document.getElementById("cat-nombre").value,
+    descripcion: document.getElementById("cat-descripcion").value,
+    id_categoria_padre: document.getElementById("cat-padre").value || null,
+    esquema_atributos: leerAtributosDelFormularioCategoria(),
+    rol_solicitante: sesionAdmin.rol
+  };
+
+  const { ok, data } = await apiFetch("/categorias", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  if (ok) {
+    toast(`Categoría "${payload.nombre}" creada con ${payload.esquema_atributos.length} atributo(s).`, "success");
+    document.getElementById("form-categoria").reset();
+    document.getElementById("categoria-atributos-filas").innerHTML = "";
+    cargarTablaCategorias();
+  } else {
+    toast(data.error || "No se pudo crear la categoría.", "error");
   }
 }
 
