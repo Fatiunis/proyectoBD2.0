@@ -87,9 +87,99 @@ function cerrarSesion() {
 }
 
 // --- CATÁLOGO ---
+
+// Esquema de filtros por atributo de la categoría actualmente seleccionada
+// (se descubre desde los documentos reales vía GET /categorias/<id>/filtros,
+// no se mantiene una lista fija de atributos por categoría en el frontend).
+let esquemaFiltrosActual = [];
+
+async function onCambioCategoria() {
+  await cargarFiltrosAtributos(document.getElementById("filtro-categoria").value);
+  cargarProductos();
+}
+
+async function cargarFiltrosAtributos(catId) {
+  const contenedor = document.getElementById("filtros-atributos");
+  const controles = document.getElementById("filtros-atributos-controles");
+
+  if (!catId) {
+    esquemaFiltrosActual = [];
+    contenedor.classList.add("hidden");
+    controles.innerHTML = "";
+    return;
+  }
+
+  const { data: filtros } = await apiFetch(`/categorias/${catId}/filtros`);
+  esquemaFiltrosActual = filtros || [];
+
+  if (esquemaFiltrosActual.length === 0) {
+    contenedor.classList.add("hidden");
+    controles.innerHTML = "";
+    return;
+  }
+
+  controles.innerHTML = esquemaFiltrosActual.map(f => {
+    const etiqueta = f.clave.replaceAll("_", " ");
+    if (f.tipo === "seleccion") {
+      return `
+        <div>
+          <label class="block text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1">${etiqueta}</label>
+          <select id="filtro-attr-${f.clave}" onchange="cargarProductos()" class="appearance-none border border-slate-200 rounded-lg bg-slate-50 hover:bg-slate-100 text-sm px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none transition cursor-pointer">
+            <option value="">Todos</option>
+            ${f.valores.map(v => `<option value="${v}">${v}</option>`).join("")}
+          </select>
+        </div>
+      `;
+    }
+    return `
+      <div>
+        <label class="block text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1">${etiqueta} (${f.min}–${f.max})</label>
+        <div class="flex items-center gap-1.5">
+          <input type="number" id="filtro-attr-${f.clave}-min" placeholder="${f.min}" step="any" onchange="cargarProductos()" class="w-20 border border-slate-200 rounded-lg bg-slate-50 hover:bg-slate-100 text-sm px-2 py-1.5 focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none transition">
+          <span class="text-slate-300 text-xs">–</span>
+          <input type="number" id="filtro-attr-${f.clave}-max" placeholder="${f.max}" step="any" onchange="cargarProductos()" class="w-20 border border-slate-200 rounded-lg bg-slate-50 hover:bg-slate-100 text-sm px-2 py-1.5 focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none transition">
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  contenedor.classList.remove("hidden");
+}
+
+function limpiarFiltrosAtributos() {
+  esquemaFiltrosActual.forEach(f => {
+    if (f.tipo === "seleccion") {
+      const el = document.getElementById(`filtro-attr-${f.clave}`);
+      if (el) el.value = "";
+    } else {
+      const min = document.getElementById(`filtro-attr-${f.clave}-min`);
+      const max = document.getElementById(`filtro-attr-${f.clave}-max`);
+      if (min) min.value = "";
+      if (max) max.value = "";
+    }
+  });
+  cargarProductos();
+}
+
 async function cargarProductos() {
   const cat = document.getElementById("filtro-categoria").value;
-  const { data: productos } = await apiFetch(cat ? `/productos?categoria_id=${cat}` : "/productos");
+  const params = new URLSearchParams();
+  if (cat) params.set("categoria_id", cat);
+
+  esquemaFiltrosActual.forEach(f => {
+    if (f.tipo === "seleccion") {
+      const valor = document.getElementById(`filtro-attr-${f.clave}`)?.value;
+      if (valor) params.set(`atributo_${f.clave}`, valor);
+    } else {
+      const min = document.getElementById(`filtro-attr-${f.clave}-min`)?.value;
+      const max = document.getElementById(`filtro-attr-${f.clave}-max`)?.value;
+      if (min) params.set(`atributo_${f.clave}_min`, min);
+      if (max) params.set(`atributo_${f.clave}_max`, max);
+    }
+  });
+
+  const qs = params.toString();
+  const { data: productos } = await apiFetch(qs ? `/productos?${qs}` : "/productos");
 
   const grid = document.getElementById("grid-productos");
   const vacio = document.getElementById("catalogo-vacio");

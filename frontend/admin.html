@@ -30,7 +30,7 @@
         <div class="w-9 h-9 rounded-lg bg-slate-900 text-white flex items-center justify-center font-extrabold text-sm">TY</div>
         <div>
           <h2 class="text-lg font-extrabold text-slate-900 leading-none">Acceso administrativo</h2>
-          <p class="text-xs text-slate-400 mt-1">Solo cuentas con rol de administrador</p>
+          <p class="text-xs text-slate-400 mt-1">Cuentas con rol de administrador o vendedor</p>
         </div>
       </div>
 
@@ -64,7 +64,10 @@
 
       <nav class="flex-1 px-3 py-4 space-y-1">
         <button id="admin-nav-catalogo" onclick="mostrarTabAdmin('catalogo')" class="w-full text-left px-3 py-2.5 rounded-lg text-sm font-semibold transition flex items-center gap-2.5 text-slate-300 hover:bg-slate-800 hover:text-white">
-          <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span> Catálogo
+          <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span> <span id="admin-nav-catalogo-label">Catálogo</span>
+        </button>
+        <button id="admin-nav-ventas" onclick="mostrarTabAdmin('ventas')" class="hidden w-full text-left px-3 py-2.5 rounded-lg text-sm font-semibold transition items-center gap-2.5 text-slate-300 hover:bg-slate-800 hover:text-white">
+          <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span> Mis ventas
         </button>
         <button id="admin-nav-usuarios" onclick="mostrarTabAdmin('usuarios')" class="w-full text-left px-3 py-2.5 rounded-lg text-sm font-semibold transition flex items-center gap-2.5 text-slate-300 hover:bg-slate-800 hover:text-white">
           <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span> Usuarios
@@ -99,6 +102,7 @@
                   <th class="p-2.5">Nombre</th>
                   <th class="p-2.5">SKU</th>
                   <th class="p-2.5">Categoría</th>
+                  <th id="admin-th-vendedor" class="p-2.5 hidden">Vendedor</th>
                   <th class="p-2.5 text-right">Precio</th>
                   <th class="p-2.5"></th>
                 </tr>
@@ -162,12 +166,71 @@
         </div>
       </div>
 
-      <!-- TAB: ALTA DE USUARIOS -->
-      <div id="admin-tab-usuarios" class="hidden max-w-md">
-        <h2 class="text-2xl font-extrabold text-slate-900 tracking-tight mb-1">Usuarios</h2>
-        <p class="text-sm text-slate-500 mb-6">Creación de cuentas con rol asignado en PostgreSQL</p>
+      <!-- TAB: MIS VENTAS (VENDEDOR) -->
+      <div id="admin-tab-ventas" class="hidden">
+        <h2 class="text-2xl font-extrabold text-slate-900 tracking-tight mb-1">Mis ventas</h2>
+        <p class="text-sm text-slate-500 mb-6">Líneas de pedido de productos vendidos por tu cuenta (fuente: PostgreSQL)</p>
 
-        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+        <div class="grid grid-cols-3 gap-4 mb-6">
+          <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+            <p class="text-[11px] uppercase tracking-wide text-slate-400 font-bold mb-1">Total vendido</p>
+            <p id="v-total-vendido" class="text-2xl font-extrabold text-slate-900">Q0.00</p>
+          </div>
+          <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+            <p class="text-[11px] uppercase tracking-wide text-slate-400 font-bold mb-1">Unidades vendidas</p>
+            <p id="v-unidades" class="text-2xl font-extrabold text-slate-900">0</p>
+          </div>
+          <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+            <p class="text-[11px] uppercase tracking-wide text-slate-400 font-bold mb-1">Líneas de pedido</p>
+            <p id="v-lineas" class="text-2xl font-extrabold text-slate-900">0</p>
+          </div>
+        </div>
+
+        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="text-left text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100">
+                  <th class="p-2.5">Pedido</th>
+                  <th class="p-2.5">Producto</th>
+                  <th class="p-2.5 text-right">Cantidad</th>
+                  <th class="p-2.5 text-right">Subtotal</th>
+                  <th class="p-2.5">Estado</th>
+                  <th class="p-2.5">Fecha</th>
+                </tr>
+              </thead>
+              <tbody id="admin-tabla-ventas"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB: ADMINISTRACIÓN DE USUARIOS -->
+      <div id="admin-tab-usuarios" class="hidden max-w-3xl">
+        <h2 class="text-2xl font-extrabold text-slate-900 tracking-tight mb-1">Usuarios</h2>
+        <p class="text-sm text-slate-500 mb-6">Gestión de cuentas y roles en PostgreSQL</p>
+
+        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 mb-6">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="text-left text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100">
+                  <th class="p-2.5">ID</th>
+                  <th class="p-2.5">Nombre</th>
+                  <th class="p-2.5">Correo</th>
+                  <th class="p-2.5">Teléfono</th>
+                  <th class="p-2.5">Rol</th>
+                  <th class="p-2.5">Registrado</th>
+                  <th class="p-2.5"></th>
+                </tr>
+              </thead>
+              <tbody id="admin-tabla-usuarios"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <h3 class="text-lg font-bold text-slate-900 mb-3">Crear nuevo usuario</h3>
+        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 max-w-md">
           <form id="form-usuario" onsubmit="altaUsuario(event)" class="space-y-4">
             <div>
               <label class="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1.5">Nombre completo</label>
@@ -263,7 +326,7 @@
   <!-- NOTIFICACIONES -->
   <div id="toast-container" class="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 items-end"></div>
 
-  <script src="js/common.js"></script>
-  <script src="js/admin.js"></script>
+  <script src="js/common.js?v=2"></script>
+  <script src="js/admin.js?v=2"></script>
 </body>
 </html>

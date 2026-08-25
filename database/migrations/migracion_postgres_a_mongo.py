@@ -26,40 +26,82 @@ MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "tiendaya_nosql")
 # ============================================================================
 # MAPEO DE ATRIBUTOS POLIMÓRFICOS POR CATEGORÍA
 # ============================================================================
-# Transforma la descripción plana en atributos estructurados según categoría
+# Cada SKU semilla tiene su propio conjunto de atributos reales (no una plantilla
+# única por categoría), para que el catálogo documental refleje variación genuina
+# entre productos y los filtros por atributo del catálogo tengan sentido.
+ATRIBUTOS_POR_SKU = {
+    # --- Laptops ---
+    "LAP-OMEN-16": {
+        "procesador": "AMD Ryzen 9 8940HX", "memoria_ram_gb": 32, "almacenamiento_ssd_gb": 1000,
+        "tarjeta_grafica": "NVIDIA RTX 4070", "tasa_refresco_hz": 180, "tamano_pantalla_pulgadas": 16.1
+    },
+    "LAP-LEN-LEGION5": {
+        "procesador": "Intel Core i7-14700HX", "memoria_ram_gb": 16, "almacenamiento_ssd_gb": 1000,
+        "tarjeta_grafica": "NVIDIA RTX 4060", "tasa_refresco_hz": 165, "tamano_pantalla_pulgadas": 16.0
+    },
+    "LAP-MAC-AIR-M3": {
+        "procesador": "Apple M3 8-Core CPU / 10-Core GPU", "memoria_ram_gb": 16, "almacenamiento_ssd_gb": 512,
+        "tarjeta_grafica": "Gráfica integrada", "tasa_refresco_hz": 60, "tamano_pantalla_pulgadas": 13.6
+    },
+    "LAP-ACER-ASPIRE3": {
+        "procesador": "Intel Core i5-1235U", "memoria_ram_gb": 8, "almacenamiento_ssd_gb": 512,
+        "tarjeta_grafica": "Gráfica integrada", "tasa_refresco_hz": 60, "tamano_pantalla_pulgadas": 14.0
+    },
+    "LAP-ROG-STRIX18": {
+        "procesador": "Intel Core i9-14900HX", "memoria_ram_gb": 64, "almacenamiento_ssd_gb": 2000,
+        "tarjeta_grafica": "NVIDIA RTX 4090", "tasa_refresco_hz": 240, "tamano_pantalla_pulgadas": 18.0
+    },
+    # --- Monitores ---
+    "MON-27-180HZ": {
+        "tamano_pantalla_pulgadas": 27.0, "tipo_panel": "IPS", "resolucion": "1920x1080 Full HD",
+        "tasa_refresco_hz": 180, "tiempo_respuesta_ms": 1
+    },
+    "MON-34-CURVO": {
+        "tamano_pantalla_pulgadas": 34.0, "tipo_panel": "VA", "resolucion": "3440x1440 WQHD",
+        "tasa_refresco_hz": 165, "tiempo_respuesta_ms": 1
+    },
+    "MON-24-BASICO": {
+        "tamano_pantalla_pulgadas": 23.8, "tipo_panel": "VA", "resolucion": "1920x1080 Full HD",
+        "tasa_refresco_hz": 75, "tiempo_respuesta_ms": 4
+    },
+    "MON-32-OLED": {
+        "tamano_pantalla_pulgadas": 31.5, "tipo_panel": "OLED", "resolucion": "3840x2160 4K UHD",
+        "tasa_refresco_hz": 240, "tiempo_respuesta_ms": 0.03
+    },
+    # --- Playeras ---
+    "TSH-OVERSIZE-BLK": {
+        "talla": "L", "color": "Negro", "material": "100% Algodón Peinado",
+        "corte": "Oversize", "instrucciones_lavado": "Lavar con agua fría, no usar secadora"
+    },
+    "TSH-VINTAGE-WHT": {
+        "talla": "M", "color": "Blanco", "material": "100% Algodón Peinado",
+        "corte": "Oversize", "instrucciones_lavado": "Lavar con agua fría, no usar secadora"
+    },
+    "TSH-MINIMAL-GRY": {
+        "talla": "M", "color": "Gris Jaspe", "material": "95% Algodón 5% Elastano",
+        "corte": "Regular Fit", "instrucciones_lavado": "Lavar con agua fría, no usar secadora"
+    },
+    "TSH-GRAPHIC-CYBER": {
+        "talla": "M", "color": "Negro", "material": "100% Algodón",
+        "corte": "Regular Fit", "instrucciones_lavado": "Lavar con agua fría, no usar secadora"
+    },
+    "TSH-CREW-BLU": {
+        "talla": "S", "color": "Azul Marino", "material": "100% Poliéster",
+        "corte": "Slim Fit", "instrucciones_lavado": "Lavar con agua fría, no usar secadora"
+    },
+    "TSH-POLO-RED": {
+        "talla": "XL", "color": "Rojo", "material": "100% Algodón Piqué",
+        "corte": "Clásico", "instrucciones_lavado": "Lavar con agua fría, no usar secadora"
+    },
+}
+
+
 def generar_atributos_heterogeneos(categoria_nombre: str, sku: str, descripcion: str) -> dict:
-    categoria = categoria_nombre.lower()
-    
-    if "laptop" in categoria or "tecnología" in categoria:
-        if "OMEN" in sku:
-            return {
-                "procesador": "AMD Ryzen 9 8940HX",
-                "memoria_ram_gb": 32,
-                "almacenamiento_ssd_gb": 1000,
-                "tarjeta_grafica": "NVIDIA RTX 4070",
-                "tasa_refresco_hz": 180,
-                "tamano_pantalla_pulgadas": 16.1
-            }
-        elif "MON" in sku:
-            return {
-                "tamano_pantalla_pulgadas": 27.0,
-                "tipo_panel": "IPS",
-                "resolucion": "1920x1080 Full HD",
-                "tasa_refresco_hz": 180,
-                "tiempo_respuesta_ms": 1,
-                "puertos": ["DisplayPort 1.4", "HDMI 2.0", "USB-C"]
-            }
-        return {"tipo_tecnologia": "General", "especificaciones": descripcion}
+    if sku in ATRIBUTOS_POR_SKU:
+        return ATRIBUTOS_POR_SKU[sku]
 
-    elif "ropa" in categoria or "playera" in categoria:
-        return {
-            "talla": "L" if "BLK" in sku else "M",
-            "color": "Negro" if "BLK" in sku else "Blanco",
-            "material": "100% Algodón Peinado",
-            "corte": "Oversize",
-            "instrucciones_lavado": "Lavar con agua fría, no usar secadora"
-        }
-
+    # Cualquier producto fuera de la semilla (creado después, vía script) recibe
+    # un atributo genérico de respaldo en lugar de fallar la migración.
     return {"descripcion_detallada": descripcion}
 
 

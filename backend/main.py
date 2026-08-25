@@ -84,6 +84,70 @@ def register():
         return jsonify({"error": f"Error en base de datos: {str(e)}"}), 500
 
 
+@app.route("/api/usuarios", methods=["GET"])
+def listar_usuarios():
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT id_usuario, nombre, email, rol, telefono, fecha_registro
+            FROM usuarios
+            ORDER BY id_usuario;
+            """
+        )
+        usuarios = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        for u in usuarios:
+            u["fecha_registro"] = u["fecha_registro"].isoformat()
+
+        return jsonify(usuarios)
+    except Exception as e:
+        return jsonify({"error": f"Error en base de datos: {str(e)}"}), 500
+
+
+@app.route("/api/usuarios/<int:id_usuario>", methods=["PUT"])
+def actualizar_usuario(id_usuario):
+    data = request.get_json() or {}
+
+    if data.get("rol_solicitante") != "administrador":
+        return jsonify({"error": "Solo un administrador puede modificar usuarios."}), 403
+
+    nuevo_rol = data.get("rol")
+    if nuevo_rol not in ["comprador", "vendedor", "administrador"]:
+        return jsonify({"error": "Rol inválido"}), 400
+
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            UPDATE usuarios SET rol = %s
+            WHERE id_usuario = %s
+            RETURNING id_usuario, nombre, email, rol, telefono, fecha_registro;
+            """,
+            (nuevo_rol, id_usuario)
+        )
+        actualizado = cur.fetchone()
+
+        if not actualizado:
+            conn.rollback()
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Usuario no encontrado"}), 404
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        actualizado["fecha_registro"] = actualizado["fecha_registro"].isoformat()
+        return jsonify({"mensaje": "Usuario actualizado con éxito", "usuario": actualizado})
+    except Exception as e:
+        return jsonify({"error": f"Error en base de datos: {str(e)}"}), 500
+
+
 @app.route("/api/auth/login", methods=["POST"])
 def login():
     data = request.get_json()
@@ -167,19 +231,102 @@ def get_categorias():
     return jsonify(categorias)
 
 
+@app.route("/api/categorias/<int:id_categoria>/filtros", methods=["GET"])
+def get_filtros_categoria(id_categoria):
+    """
+    Descubre, a partir de los documentos reales, qué atributos son relevantes
+    para filtrar dentro de una categoría (en vez de mantener una lista fija por
+    categoría en el backend o el frontend). Usa $objectToArray + $unwind + $group
+    para aplanar el objeto "atributos" -que varía de forma libre por documento- y
+    reunir, por cada clave encontrada, todos los valores usados en la categoría.
+    """
+    pipeline = [
+        {"$match": {"categoria.id_categoria": id_categoria, "activo": True}},
+        {"$project": {"pares": {"$objectToArray": "$atributos"}}},
+        {"$unwind": "$pares"},
+        {"$group": {"_id": "$pares.k", "valores": {"$push": "$pares.v"}}}
+    ]
+    grupos = list(col_productos.aggregate(pipeline))
+
+    filtros = []
+    for g in grupos:
+        clave = g["_id"]
+        valores = g["valores"]
+
+        # Los atributos de tipo lista (ej. "puertos") no son filtros directos; se descartan.
+        if any(isinstance(v, list) for v in valores):
+            continue
+
+        es_numerico = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in valores)
+        if es_numerico:
+            # Si todos los productos comparten el mismo valor, el rango no discrimina nada; se descarta.
+            if min(valores) != max(valores):
+                filtros.append({
+                    "clave": clave,
+                    "tipo": "rango",
+                    "min": min(valores),
+                    "max": max(valores)
+                })
+            continue
+
+        # Un atributo de texto solo sirve como filtro de selección si aparece con
+        # más de un valor distinto entre productos (ej. "talla", "color"); si es
+        # constante o todos los valores son únicos (ej. una descripción libre),
+        # no aporta como filtro y se descarta.
+        valores_texto = [str(v) for v in valores]
+        distintos = sorted(set(valores_texto))
+        if 2 <= len(distintos) < len(valores_texto):
+            filtros.append({
+                "clave": clave,
+                "tipo": "seleccion",
+                "valores": distintos
+            })
+
+    filtros.sort(key=lambda f: f["clave"])
+    return jsonify(filtros)
+
+
 @app.route("/api/productos", methods=["GET"])
 def get_productos():
     cat_id = request.args.get("categoria_id")
+    vendedor_id = request.args.get("vendedor_id")
     query = {"activo": True}
     if cat_id:
         try:
             query["categoria.id_categoria"] = int(cat_id)
         except ValueError:
             pass
+    if vendedor_id:
+        try:
+            query["vendedor.id_vendedor"] = int(vendedor_id)
+        except ValueError:
+            pass
+
+    # Filtros dinámicos por atributo, según el esquema descubierto en /categorias/<id>/filtros:
+    #   atributo_<clave>=valor           -> coincidencia exacta (atributos categóricos)
+    #   atributo_<clave>_min / _max      -> rango numérico (atributos numéricos)
+    condiciones_rango = {}
+    for arg, valor in request.args.items():
+        if not arg.startswith("atributo_") or not valor:
+            continue
+        nombre = arg[len("atributo_"):]
+
+        if nombre.endswith("_min") or nombre.endswith("_max"):
+            clave = nombre[:-4]
+            operador = "$gte" if nombre.endswith("_min") else "$lte"
+            try:
+                condiciones_rango.setdefault(clave, {})[operador] = float(valor)
+            except ValueError:
+                pass
+        else:
+            query[f"atributos.{nombre}"] = valor
+
+    for clave, condicion in condiciones_rango.items():
+        query[f"atributos.{clave}"] = condicion
 
     docs = list(col_productos.find(
         query,
-        {"_id": 1, "sku": 1, "nombre": 1, "precio_base": 1, "categoria": 1, "atributos": 1, "imagenes": 1}
+        {"_id": 1, "sku": 1, "nombre": 1, "precio_base": 1, "categoria": 1, "atributos": 1, "imagenes": 1, "vendedor": 1}
     ).sort("precio_base", ASCENDING))
 
     for d in docs:
@@ -203,6 +350,14 @@ def crear_o_actualizar_producto():
         return jsonify({"error": "Datos inválidos"}), 400
 
     existente = col_productos.find_one({"sku": data["sku"]})
+
+    rol_solicitante = data.get("rol_solicitante")
+    id_vendedor_solicitante = data.get("id_vendedor")
+    if existente and rol_solicitante != "administrador":
+        id_vendedor_actual = existente.get("vendedor", {}).get("id_vendedor")
+        if id_vendedor_actual != id_vendedor_solicitante:
+            return jsonify({"error": "No tienes permiso para editar un producto de otro vendedor."}), 403
+
     doc_id = existente["_id"] if existente else f"PROD-{data['sku'].replace(' ', '-').upper()}"
     now = datetime.now(timezone.utc)
 
@@ -217,7 +372,7 @@ def crear_o_actualizar_producto():
             "id_categoria": data.get("id_categoria", 1),
             "nombre": data.get("nombre_categoria", "General")
         },
-        "vendedor": {
+        "vendedor": existente["vendedor"] if existente else {
             "id_vendedor": data.get("id_vendedor", 2),
             "nombre_comercial": data.get("nombre_vendedor", "TechStore"),
             "email_contacto": f"{data.get('nombre_vendedor', 'tech').lower().replace(' ', '')}@tiendaya.com"
@@ -237,7 +392,7 @@ def crear_o_actualizar_producto():
         "usuario_responsable": {
             "id_usuario": data.get("id_vendedor", 2),
             "nombre": data.get("nombre_vendedor", "TechStore"),
-            "rol": "administrador"
+            "rol": rol_solicitante or "administrador"
         },
         "estado_resultante": {
             "nombre": data["nombre"],
@@ -285,6 +440,55 @@ def reconstruir_historial(producto_id):
 
     res[0]["fecha_vigencia_evento"] = res[0]["fecha_vigencia_evento"].isoformat()
     return jsonify(res[0])
+
+
+@app.route("/api/vendedores/<int:id_vendedor>/ventas", methods=["GET"])
+def get_ventas_vendedor(id_vendedor):
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT
+                lp.id_linea,
+                lp.id_producto,
+                lp.nombre_producto_historico,
+                lp.cantidad,
+                lp.precio_unitario_historico,
+                lp.subtotal,
+                pe.id_pedido,
+                pe.fecha_pedido,
+                pe.estado
+            FROM lineas_pedido lp
+            JOIN productos p ON p.id_producto = lp.id_producto
+            JOIN pedidos pe ON pe.id_pedido = lp.id_pedido
+            WHERE p.id_vendedor = %s
+            ORDER BY pe.fecha_pedido DESC;
+            """,
+            (id_vendedor,)
+        )
+        ventas = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        for v in ventas:
+            v["fecha_pedido"] = v["fecha_pedido"].isoformat()
+            v["precio_unitario_historico"] = float(v["precio_unitario_historico"])
+            v["subtotal"] = float(v["subtotal"])
+
+        total_vendido = sum(v["subtotal"] for v in ventas if v["estado"] != "cancelado")
+        unidades_vendidas = sum(v["cantidad"] for v in ventas if v["estado"] != "cancelado")
+
+        return jsonify({
+            "ventas": ventas,
+            "resumen": {
+                "total_vendido": total_vendido,
+                "unidades_vendidas": unidades_vendidas,
+                "numero_lineas": len(ventas)
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": f"Error en base de datos: {str(e)}"}), 500
 
 
 if __name__ == "__main__":

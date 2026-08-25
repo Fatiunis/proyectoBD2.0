@@ -1,12 +1,22 @@
 let sesionAdmin = getSesion();
 
 function actualizarAccesoAdmin() {
-  const esAdmin = sesionAdmin && sesionAdmin.rol === "administrador";
-  document.getElementById("admin-login-gate").classList.toggle("hidden", esAdmin);
-  document.getElementById("admin-shell").classList.toggle("hidden", !esAdmin);
+  const rolesPermitidos = ["administrador", "vendedor"];
+  const tieneAcceso = sesionAdmin && rolesPermitidos.includes(sesionAdmin.rol);
+  document.getElementById("admin-login-gate").classList.toggle("hidden", tieneAcceso);
+  document.getElementById("admin-shell").classList.toggle("hidden", !tieneAcceso);
 
-  if (esAdmin) {
-    document.getElementById("admin-user-info").textContent = `${sesionAdmin.nombre} · administrador`;
+  if (tieneAcceso) {
+    const esVendedor = sesionAdmin.rol === "vendedor";
+    document.getElementById("admin-user-info").textContent = `${sesionAdmin.nombre} · ${sesionAdmin.rol}`;
+
+    // Los vendedores solo administran su propio catálogo y ventas; "Usuarios" es exclusivo del administrador.
+    document.getElementById("admin-nav-usuarios").classList.toggle("hidden", esVendedor);
+    document.getElementById("admin-nav-ventas").classList.toggle("hidden", !esVendedor);
+    document.getElementById("admin-nav-ventas").classList.toggle("flex", esVendedor);
+    document.getElementById("admin-nav-catalogo-label").textContent = esVendedor ? "Mi catálogo" : "Catálogo";
+    document.getElementById("admin-th-vendedor").classList.toggle("hidden", esVendedor);
+
     mostrarTabAdmin("catalogo");
   }
 }
@@ -27,8 +37,8 @@ async function iniciarSesionAdmin(e) {
     return;
   }
 
-  if (data.usuario.rol !== "administrador") {
-    document.getElementById("admin-login-error").textContent = "Esta cuenta no tiene permisos de administrador.";
+  if (!["administrador", "vendedor"].includes(data.usuario.rol)) {
+    document.getElementById("admin-login-error").textContent = "Esta cuenta no tiene permisos de administrador ni de vendedor.";
     document.getElementById("admin-login-error").classList.remove("hidden");
     return;
   }
@@ -46,7 +56,7 @@ function cerrarSesionAdmin() {
 }
 
 function mostrarTabAdmin(tab) {
-  ["catalogo", "usuarios", "historial"].forEach(t => {
+  ["catalogo", "ventas", "usuarios", "historial"].forEach(t => {
     document.getElementById(`admin-tab-${t}`).classList.toggle("hidden", t !== tab);
     const btn = document.getElementById(`admin-nav-${t}`);
     btn.classList.toggle("bg-indigo-600", t === tab);
@@ -54,31 +64,83 @@ function mostrarTabAdmin(tab) {
     btn.classList.toggle("text-slate-300", t !== tab);
   });
   if (tab === "catalogo") cargarTablaProductos();
+  if (tab === "ventas") cargarMisVentas();
+  if (tab === "usuarios") cargarTablaUsuarios();
   if (tab === "historial") cargarSelectorProductosHistorial();
 }
 
 // --- GESTIÓN DE CATÁLOGO ---
+function esVendedorActual() {
+  return sesionAdmin && sesionAdmin.rol === "vendedor";
+}
+
 async function cargarTablaProductos() {
-  const { data: productos } = await apiFetch("/productos");
+  const path = esVendedorActual() ? `/productos?vendedor_id=${sesionAdmin.id_usuario}` : "/productos";
+  const { data: productos } = await apiFetch(path);
   const tbody = document.getElementById("admin-tabla-productos");
   tbody.innerHTML = "";
 
   if (!productos || productos.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-sm text-slate-400">Aún no hay productos en el catálogo.</td></tr>`;
+    const colspan = esVendedorActual() ? 6 : 7;
+    tbody.innerHTML = `<tr><td colspan="${colspan}" class="p-6 text-center text-sm text-slate-400">${esVendedorActual() ? "Aún no tienes productos en tu catálogo." : "Aún no hay productos en el catálogo."}</td></tr>`;
     return;
   }
 
   productos.forEach(p => {
+    const celdaVendedor = esVendedorActual() ? "" : `<td class="p-2.5 text-slate-500 text-xs">${p.vendedor ? p.vendedor.nombre_comercial : "N/D"}</td>`;
     tbody.innerHTML += `
       <tr class="border-b border-slate-50 hover:bg-slate-50/80 transition">
         <td class="p-2.5 text-slate-400 font-mono text-xs">${p._id}</td>
         <td class="p-2.5 font-medium text-slate-800">${p.nombre}</td>
         <td class="p-2.5 text-slate-500 font-mono text-xs">${p.sku}</td>
         <td class="p-2.5"><span class="text-[10px] font-bold uppercase px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full">${p.categoria.nombre}</span></td>
+        ${celdaVendedor}
         <td class="p-2.5 text-right font-semibold text-slate-800">Q${p.precio_base.toFixed(2)}</td>
         <td class="p-2.5 text-right">
           <button onclick="cargarProductoParaEditar('${p._id}')" class="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg transition">Editar</button>
         </td>
+      </tr>
+    `;
+  });
+}
+
+// --- MIS VENTAS (VENDEDOR) ---
+async function cargarMisVentas() {
+  const { ok, data } = await apiFetch(`/vendedores/${sesionAdmin.id_usuario}/ventas`);
+  const tbody = document.getElementById("admin-tabla-ventas");
+
+  if (!ok) {
+    toast(data.error || "No se pudieron cargar las ventas.", "error");
+    return;
+  }
+
+  document.getElementById("v-total-vendido").textContent = `Q${data.resumen.total_vendido.toFixed(2)}`;
+  document.getElementById("v-unidades").textContent = data.resumen.unidades_vendidas;
+  document.getElementById("v-lineas").textContent = data.resumen.numero_lineas;
+
+  tbody.innerHTML = "";
+  if (!data.ventas || data.ventas.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-sm text-slate-400">Aún no tienes ventas registradas.</td></tr>`;
+    return;
+  }
+
+  const ESTILO_ESTADO = {
+    pendiente: "bg-amber-100 text-amber-800",
+    pagado: "bg-emerald-100 text-emerald-800",
+    enviado: "bg-sky-100 text-sky-800",
+    entregado: "bg-emerald-100 text-emerald-800",
+    cancelado: "bg-red-100 text-red-800"
+  };
+
+  data.ventas.forEach(v => {
+    tbody.innerHTML += `
+      <tr class="border-b border-slate-50 hover:bg-slate-50/80 transition">
+        <td class="p-2.5 text-slate-400 font-mono text-xs">#${v.id_pedido}</td>
+        <td class="p-2.5 font-medium text-slate-800">${v.nombre_producto_historico}</td>
+        <td class="p-2.5 text-right text-slate-700">${v.cantidad}</td>
+        <td class="p-2.5 text-right font-semibold text-slate-800">Q${v.subtotal.toFixed(2)}</td>
+        <td class="p-2.5"><span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${ESTILO_ESTADO[v.estado] || "bg-slate-100 text-slate-700"}">${v.estado}</span></td>
+        <td class="p-2.5 text-xs text-slate-500">${formatearFecha(v.fecha_pedido)}</td>
       </tr>
     `;
   });
@@ -177,6 +239,7 @@ async function guardarProducto(e) {
     nombre_categoria: info.nombre_categoria,
     id_vendedor: sesionAdmin.id_usuario,
     nombre_vendedor: sesionAdmin.nombre,
+    rol_solicitante: sesionAdmin.rol,
     atributos
   };
 
@@ -194,7 +257,92 @@ async function guardarProducto(e) {
   }
 }
 
-// --- ALTA DE USUARIOS ---
+// --- ADMINISTRACIÓN DE USUARIOS ---
+const ROLES_DISPONIBLES = ["comprador", "vendedor", "administrador"];
+let usuariosCache = [];
+let idUsuarioEnEdicion = null;
+
+async function cargarTablaUsuarios() {
+  const { ok, data: usuarios } = await apiFetch("/usuarios");
+  const tbody = document.getElementById("admin-tabla-usuarios");
+
+  if (!ok) {
+    toast(usuarios.error || "No se pudieron cargar los usuarios.", "error");
+    return;
+  }
+
+  usuariosCache = usuarios;
+  idUsuarioEnEdicion = null;
+  renderTablaUsuarios();
+}
+
+function renderTablaUsuarios() {
+  const tbody = document.getElementById("admin-tabla-usuarios");
+  tbody.innerHTML = "";
+
+  if (!usuariosCache || usuariosCache.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" class="p-6 text-center text-sm text-slate-400">No hay usuarios registrados.</td></tr>`;
+    return;
+  }
+
+  usuariosCache.forEach(u => {
+    const enEdicion = u.id_usuario === idUsuarioEnEdicion;
+
+    const celdaRol = enEdicion
+      ? `<select id="rol-edit-${u.id_usuario}" class="border border-slate-300 p-1.5 rounded-lg bg-white text-xs focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition">
+          ${ROLES_DISPONIBLES.map(r => `<option value="${r}" ${r === u.rol ? "selected" : ""}>${r}</option>`).join("")}
+        </select>`
+      : `<span class="text-[10px] font-bold uppercase px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full">${u.rol}</span>`;
+
+    const celdaAcciones = enEdicion
+      ? `<button onclick="guardarRolUsuario(${u.id_usuario})" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg transition mr-1.5">Guardar</button>
+         <button onclick="cancelarEdicionRol()" class="px-2.5 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-semibold rounded-lg transition">Cancelar</button>`
+      : `<button onclick="editarRolUsuario(${u.id_usuario})" class="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg transition">Cambiar rol</button>`;
+
+    tbody.innerHTML += `
+      <tr class="border-b border-slate-50 hover:bg-slate-50/80 transition">
+        <td class="p-2.5 text-slate-400 font-mono text-xs">${u.id_usuario}</td>
+        <td class="p-2.5 font-medium text-slate-800">${u.nombre}</td>
+        <td class="p-2.5 text-slate-500 text-xs">${u.email}</td>
+        <td class="p-2.5 text-slate-500 text-xs">${u.telefono || "—"}</td>
+        <td class="p-2.5">${celdaRol}</td>
+        <td class="p-2.5 text-xs text-slate-500">${formatearFecha(u.fecha_registro)}</td>
+        <td class="p-2.5 text-right whitespace-nowrap">${celdaAcciones}</td>
+      </tr>
+    `;
+  });
+}
+
+function editarRolUsuario(id) {
+  idUsuarioEnEdicion = id;
+  renderTablaUsuarios();
+}
+
+function cancelarEdicionRol() {
+  idUsuarioEnEdicion = null;
+  renderTablaUsuarios();
+}
+
+async function guardarRolUsuario(id) {
+  const nuevoRol = document.getElementById(`rol-edit-${id}`).value;
+
+  const { ok, data } = await apiFetch(`/usuarios/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ rol: nuevoRol, rol_solicitante: sesionAdmin.rol })
+  });
+
+  if (ok) {
+    toast(`Rol actualizado a "${nuevoRol}".`, "success");
+    if (id === sesionAdmin.id_usuario && nuevoRol !== sesionAdmin.rol) {
+      toast("Cambiaste tu propio rol; vuelve a iniciar sesión para reflejarlo en el panel.", "info");
+    }
+    idUsuarioEnEdicion = null;
+    cargarTablaUsuarios();
+  } else {
+    toast(data.error || "No se pudo actualizar el rol.", "error");
+  }
+}
+
 async function altaUsuario(e) {
   e.preventDefault();
   const payload = {
@@ -213,6 +361,7 @@ async function altaUsuario(e) {
   if (ok) {
     toast(`Usuario "${payload.nombre}" creado con rol ${payload.rol}.`, "success");
     document.getElementById("form-usuario").reset();
+    cargarTablaUsuarios();
   } else {
     toast(data.error || "No se pudo crear el usuario.", "error");
   }
@@ -222,7 +371,8 @@ async function altaUsuario(e) {
 let mapaProductosHistorial = {};
 
 async function cargarSelectorProductosHistorial() {
-  const { data: productos } = await apiFetch("/productos");
+  const path = esVendedorActual() ? `/productos?vendedor_id=${sesionAdmin.id_usuario}` : "/productos";
+  const { data: productos } = await apiFetch(path);
   const ordenados = [...(productos || [])].sort((a, b) => a.nombre.localeCompare(b.nombre));
 
   mapaProductosHistorial = {};

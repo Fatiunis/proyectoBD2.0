@@ -113,7 +113,7 @@
         <div class="flex items-center gap-2.5">
           <label class="text-xs font-bold uppercase tracking-wide text-slate-400">Categoría</label>
           <div class="relative">
-            <select id="filtro-categoria" onchange="cargarProductos()" class="appearance-none pl-3 pr-9 py-2 border border-slate-200 rounded-lg bg-slate-50 hover:bg-slate-100 text-sm font-medium text-slate-700 focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none transition cursor-pointer">
+            <select id="filtro-categoria" onchange="onCambioCategoria()" class="appearance-none pl-3 pr-9 py-2 border border-slate-200 rounded-lg bg-slate-50 hover:bg-slate-100 text-sm font-medium text-slate-700 focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none transition cursor-pointer">
               <option value="">Todas las categorías</option>
               <option value="2">Laptops (Tecnología)</option>
               <option value="3">Monitores (Tecnología)</option>
@@ -122,6 +122,10 @@
             <svg class="w-4 h-4 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
           </div>
         </div>
+      </div>
+      <div id="filtros-atributos" class="hidden bg-white border border-slate-200 rounded-2xl shadow-sm px-6 py-4 mb-6 flex flex-wrap items-end gap-4">
+        <div id="filtros-atributos-controles" class="flex flex-wrap items-end gap-4"></div>
+        <button onclick="limpiarFiltrosAtributos()" class="text-xs font-semibold text-slate-400 hover:text-slate-700 transition mb-0.5">Limpiar filtros</button>
       </div>
       <div id="grid-productos" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5"></div>
       <div id="catalogo-vacio" class="hidden text-center py-16 text-slate-400">
@@ -146,7 +150,7 @@
     TiendaYa · Portal E-Commerce con arquitectura políglota (PostgreSQL + MongoDB)
   </footer>
 
-  <script src="js/common.js"></script>
-  <script src="js/public.js"></script>
+  <script src="js/common.js?v=2"></script>
+  <script src="js/public.js?v=2"></script>
 </body>
 </html>
