@@ -6,6 +6,11 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from pymongo import MongoClient, ASCENDING
 
+# La consola de Windows no usa UTF-8 por defecto y falla al imprimir "✓"/"✗";
+# forzamos la codificación de salida para que el script corra igual en todo el equipo.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 load_dotenv()
 
 # ============================================================================
