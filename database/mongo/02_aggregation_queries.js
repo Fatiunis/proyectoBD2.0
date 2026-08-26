@@ -1,6 +1,10 @@
 use tiendaya_nosql;
 
 // 1. Marco de Agregación: Métricas del Catálogo por Categoría
+// Nota: $round no es un acumulador válido dentro de $group -aunque envuelva a
+// $avg-, Mongo exige que cada campo del $group sea directamente un acumulador
+// ($avg, $sum, $min...). Por eso el promedio se calcula "en bruto" aquí y se
+// redondea en una etapa $addFields posterior.
 db.productos.aggregate([
   { $match: { activo: true } },
   {
@@ -8,12 +12,18 @@ db.productos.aggregate([
       _id: "$categoria.nombre",
       id_categoria: { $first: "$categoria.id_categoria" },
       total_productos: { $sum: 1 },
-      precio_promedio: { $round: [{ $avg: "$precio_base" }, 2] },
+      precio_promedio_bruto: { $avg: "$precio_base" },
       precio_minimo: { $min: "$precio_base" },
       precio_maximo: { $max: "$precio_base" },
       skus_disponibles: { $push: "$sku" }
     }
   },
+  {
+    $addFields: {
+      precio_promedio: { $round: ["$precio_promedio_bruto", 2] }
+    }
+  },
+  { $project: { precio_promedio_bruto: 0 } },
   { $sort: { total_productos: -1 } }
 ]);
 
