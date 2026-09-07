@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from "vue";
+import { ref, computed, watch } from "vue";
 import { useRouter, RouterLink } from "vue-router";
 import { apiFetch } from "../services/api";
 import { useToast } from "../composables/useToast";
@@ -18,6 +18,12 @@ const { agregar } = useCarrito();
 const producto = ref(null);
 const cargando = ref(true);
 const cantidad = ref(1);
+
+const atributosVisibles = computed(() =>
+  Object.entries(producto.value?.atributos || {}).filter(
+    ([, valor]) => valor !== "" && valor !== null && valor !== undefined && !(typeof valor === "number" && Number.isNaN(valor))
+  )
+);
 
 async function cargarProducto(id) {
   cargando.value = true;
@@ -74,8 +80,8 @@ function onBuscar(texto) {
 
           <div class="border-t border-neutral-200 pt-5 mb-6">
             <h2 class="text-xs font-semibold uppercase tracking-wide text-neutral-400 mb-3">Especificaciones</h2>
-            <dl v-if="Object.keys(producto.atributos || {}).length > 0" class="grid grid-cols-2 gap-x-6 gap-y-3">
-              <template v-for="[clave, valor] in Object.entries(producto.atributos)" :key="clave">
+            <dl v-if="atributosVisibles.length > 0" class="grid grid-cols-2 gap-x-6 gap-y-3">
+              <template v-for="[clave, valor] in atributosVisibles" :key="clave">
                 <dt class="text-xs text-neutral-400 self-start">{{ clave.replaceAll("_", " ") }}</dt>
                 <dd class="text-sm text-neutral-800 font-medium self-start">{{ Array.isArray(valor) ? valor.join(", ") : valor }}</dd>
               </template>
