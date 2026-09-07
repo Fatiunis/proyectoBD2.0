@@ -8,7 +8,7 @@ const router = createRouter({
   routes: [
     { path: '/', name: 'catalogo', component: VistaPublica },
     { path: '/producto/:id', name: 'producto', component: VistaDetalleProducto, props: true },
-    { path: '/admin', name: 'admin', component: VistaAdmin },
+    { path: '/admin/:tab?', name: 'admin', component: VistaAdmin, props: true },
   ],
 })
 
