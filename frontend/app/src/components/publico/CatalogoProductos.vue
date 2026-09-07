@@ -8,8 +8,6 @@ const props = defineProps({
   busqueda: { type: String, default: "" },
 });
 
-const emit = defineEmits(["ver-detalle"]);
-
 const categoriasDisponibles = ref([]);
 const categoriaSeleccionada = ref("");
 const esquemaFiltrosActual = ref([]);
@@ -69,10 +67,6 @@ async function cargarProductos() {
   cargado.value = true;
 }
 
-function verDetalle(id) {
-  emit("ver-detalle", id);
-}
-
 watch(() => props.busqueda, () => cargarProductos());
 
 onMounted(async () => {
@@ -110,7 +104,7 @@ onMounted(async () => {
         v-if="productos.length > 0"
         class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-x-6 gap-y-12 pt-6 lg:pt-0 pb-6 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:pr-2 scrollbar-fina"
       >
-        <TarjetaProducto v-for="p in productos" :key="p._id" :producto="p" @click="verDetalle" />
+        <TarjetaProducto v-for="p in productos" :key="p._id" :producto="p" />
       </div>
       <div v-else-if="cargado" class="text-center py-24 text-neutral-400">
         <p class="text-sm font-medium">No se encontraron productos con estos filtros.</p>

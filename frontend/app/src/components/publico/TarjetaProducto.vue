@@ -1,15 +1,14 @@
 <script setup>
+import { RouterLink } from "vue-router";
 import ImagenProducto from "../ImagenProducto.vue";
 
 const props = defineProps({
   producto: { type: Object, required: true },
 });
-
-const emit = defineEmits(["click"]);
 </script>
 
 <template>
-  <div @click="emit('click', producto._id)" class="cursor-pointer group">
+  <RouterLink :to="`/producto/${producto._id}`" class="block cursor-pointer group">
     <div class="overflow-hidden rounded-2xl">
       <div class="transition-transform duration-500 group-hover:scale-[1.03]">
         <ImagenProducto :producto="producto" />
@@ -25,5 +24,5 @@ const emit = defineEmits(["click"]);
         </div>
       </div>
     </div>
-  </div>
+  </RouterLink>
 </template>
