@@ -27,6 +27,50 @@ PG_CONFIG = {
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "tiendaya_nosql")
 
+# ============================================================================
+# FOTOS REALES POR SKU (Unsplash, licencia libre de uso comercial)
+# ============================================================================
+# Portada y detalle por SKU. Los SKU que no aparezcan aquí (ej. productos de
+# prueba creados a mano) reciben una foto genérica según su categoría.
+_UNSPLASH = "https://images.unsplash.com/{}?auto=format&fit=crop&w={}&q=80"
+
+IMAGENES_POR_SKU = {
+    "LAP-OMEN-16":       ("photo-1603302576837-37561b2e2302", "photo-1640955014216-75201056c829"),
+    "LAP-LEN-LEGION5":   ("photo-1611078489935-0cb964de46d6", "photo-1630794180018-433d915c34ac"),
+    "LAP-MAC-AIR-M3":    ("photo-1517336714731-489689fd1ca8", "photo-1629131726692-1accd0c53ce0"),
+    "LAP-ACER-ASPIRE3":  ("photo-1637329428580-8fddec26fa67", "photo-1663354027456-ce6a7e07d212"),
+    "LAP-ROG-STRIX18":   ("photo-1658262530868-f7460e2f071f", "photo-1684127987312-43455fd95925"),
+    "MON-27-180HZ":      ("photo-1534423861386-85a16f5d13fd", "photo-1593305841991-05c297ba4575"),
+    "MON-34-CURVO":      ("photo-1547658718-1cdaa0852790", "photo-1585792180666-f7347c490ee2"),
+    "MON-24-BASICO":     ("photo-1484788984921-03950022c9ef", "photo-1527443224154-c4a3942d3acf"),
+    "MON-32-OLED":       ("photo-1614179924047-e1ab49a0a0cf", "photo-1691480195680-144318cfa695"),
+    "TSH-OVERSIZE-BLK":  ("photo-1571455786673-9d9d6c194f90", "photo-1726140872004-850c80900ae3"),
+    "TSH-VINTAGE-WHT":   ("photo-1581655353564-df123a1eb820", "photo-1521572163474-6864f9cf17ab"),
+    "TSH-MINIMAL-GRY":   ("photo-1564584217132-2271feaeb3c5", "photo-1706550632237-24b904d8097a"),
+    "TSH-GRAPHIC-CYBER": ("photo-1775979654476-89575df179bd", "photo-1655141559812-42f8c1e8942d"),
+    "TSH-CREW-BLU":      ("photo-1734249030515-9fdbaa7724aa", "photo-1739047599736-4e1699c7df56"),
+    "TSH-POLO-RED":      ("photo-1760287363713-a864ca9b1b1f", "photo-1565562193381-576c27829023"),
+}
+
+# Foto genérica de respaldo por categoría, para SKU nuevos que no estén en el mapa de arriba.
+IMAGEN_GENERICA_POR_CATEGORIA = {
+    "Laptops":   ("photo-1603302576837-37561b2e2302", "photo-1640955014216-75201056c829"),
+    "Monitores": ("photo-1534423861386-85a16f5d13fd", "photo-1593305841991-05c297ba4575"),
+    "Playeras":  ("photo-1571455786673-9d9d6c194f90", "photo-1726140872004-850c80900ae3"),
+}
+
+
+def imagenes_para_producto(sku, nombre_categoria):
+    """Devuelve el arreglo de imágenes embebidas (portada + detalle) para un producto."""
+    ids = IMAGENES_POR_SKU.get(sku) or IMAGEN_GENERICA_POR_CATEGORIA.get(nombre_categoria)
+    if not ids:
+        return []
+    id_portada, id_detalle = ids
+    return [
+        {"id_imagen": 1, "url": _UNSPLASH.format(id_portada, 1200), "es_portada": True, "orden": 1},
+        {"id_imagen": 2, "url": _UNSPLASH.format(id_detalle, 1200), "es_portada": False, "orden": 2},
+    ]
+
 
 # ============================================================================
 # MAPEO DE ATRIBUTOS POLIMÓRFICOS POR CATEGORÍA
@@ -165,21 +209,8 @@ def ejecutar_migracion():
     for p in productos_pg:
         id_producto_str = f"PROD-{p['id_producto']:04d}"
         
-        # Generación de URLs simuladas de imágenes embebidas
-        imagenes_embebidas = [
-            {
-                "id_imagen": 1,
-                "url": f"https://cdn.tiendaya.com/productos/{p['sku'].lower()}_portada.jpg",
-                "es_portada": True,
-                "orden": 1
-            },
-            {
-                "id_imagen": 2,
-                "url": f"https://cdn.tiendaya.com/productos/{p['sku'].lower()}_detalle.jpg",
-                "es_portada": False,
-                "orden": 2
-            }
-        ]
+        # Imágenes reales (Unsplash) embebidas, mapeadas por SKU/categoría
+        imagenes_embebidas = imagenes_para_producto(p["sku"], p["nombre_categoria"])
 
         atributos = generar_atributos_heterogeneos(
             p["nombre_categoria"], 
@@ -263,6 +294,14 @@ def ejecutar_migracion():
     col_historial.create_index(
         [("producto_id", ASCENDING), ("fecha_evento", ASCENDING)],
         name="idx_historial_producto_fecha"
+    )
+
+    # Índice de texto para la búsqueda del catálogo (GET /api/productos?q=)
+    col_productos.create_index(
+        [("nombre", "text"), ("descripcion", "text"), ("sku", "text")],
+        weights={"nombre": 5, "sku": 3, "descripcion": 1},
+        default_language="spanish",
+        name="idx_texto_busqueda"
     )
 
     print("[✓] Índices creados satisfactoriamente.")
