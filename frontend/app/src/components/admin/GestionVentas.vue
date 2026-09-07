@@ -19,7 +19,7 @@ const ESTILO_ESTADO = {
 };
 
 function formatearFecha(iso) {
-  return new Date(iso).toLocaleString("es-GT", { dateStyle: "long", timeStyle: "short" });
+  return new Date(iso).toLocaleString("es-GT", { dateStyle: "long", timeStyle: "short", timeZone: "America/Guatemala" });
 }
 
 async function cargarMisVentas() {

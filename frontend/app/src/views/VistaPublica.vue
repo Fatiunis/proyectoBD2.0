@@ -1,15 +1,21 @@
 <script setup>
 import { ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import NavPublica from "../components/publico/NavPublica.vue";
 import CatalogoProductos from "../components/publico/CatalogoProductos.vue";
-import DetalleProducto from "../components/publico/DetalleProducto.vue";
 import Carrito from "../components/publico/Carrito.vue";
 import FormularioLogin from "../components/publico/FormularioLogin.vue";
 import FormularioRegistro from "../components/publico/FormularioRegistro.vue";
 
-const vistaActual = ref("catalogo");
-const busqueda = ref("");
-const productoDetalleId = ref(null);
+const route = useRoute();
+const router = useRouter();
+
+// Otras vistas (ej. VistaDetalleProducto) navegan de vuelta a "/" con estos
+// query params para pedir un tab distinto de "catalogo" o disparar una
+// búsqueda, ya que carrito/login/registro no tienen su propia URL.
+const vistaActual = ref(typeof route.query.vista === "string" ? route.query.vista : "catalogo");
+const busqueda = ref(typeof route.query.q === "string" ? route.query.q : "");
+if (Object.keys(route.query).length > 0) router.replace({ path: "/" });
 
 function cambiarVista(vista) {
   vistaActual.value = vista;
@@ -29,10 +35,8 @@ function onBuscar(texto) {
       <FormularioLogin v-if="vistaActual === 'login'" @exito="cambiarVista('catalogo')" @ir-a-registro="cambiarVista('registro')" />
       <FormularioRegistro v-else-if="vistaActual === 'registro'" @exito="cambiarVista('login')" />
       <Carrito v-else-if="vistaActual === 'carrito'" @completado="cambiarVista('catalogo')" />
-      <CatalogoProductos v-else :busqueda="busqueda" @ver-detalle="productoDetalleId = $event" />
+      <CatalogoProductos v-else :busqueda="busqueda" />
     </main>
-
-    <DetalleProducto :producto-id="productoDetalleId" @cerrar="productoDetalleId = null" />
 
     <footer class="border-t border-neutral-200 bg-white text-neutral-400 text-xs py-6 text-center tracking-wide">
       TiendaYa · Portal E-Commerce con arquitectura políglota (PostgreSQL + MongoDB)

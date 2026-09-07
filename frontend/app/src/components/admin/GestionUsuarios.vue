@@ -87,7 +87,7 @@ async function crearUsuario() {
 }
 
 function formatearFecha(iso) {
-  return new Date(iso).toLocaleString("es-GT", { dateStyle: "long", timeStyle: "short" });
+  return new Date(iso).toLocaleString("es-GT", { dateStyle: "long", timeStyle: "short", timeZone: "America/Guatemala" });
 }
 
 onMounted(cargarUsuarios);

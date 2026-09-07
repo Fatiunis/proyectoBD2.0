@@ -1,10 +1,10 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 from flask import Blueprint, request, jsonify
 from pymongo import ASCENDING
 from sqlalchemy.exc import IntegrityError
 
-from ..extensions import db, col_productos, col_historial
+from ..extensions import db, col_productos, col_historial, ZONA_GUATEMALA
 from ..models import Categoria, Producto, Inventario
 
 bp = Blueprint("catalogo", __name__)
@@ -276,7 +276,7 @@ def crear_o_actualizar_producto():
             }), 400
 
     doc_id = existente["_id"] if existente else f"PROD-{data['sku'].replace(' ', '-').upper()}"
-    now = datetime.now(timezone.utc)
+    now = datetime.now(ZONA_GUATEMALA)
 
     # --- F1: producto nuevo -> crear también la fila en Postgres (productos + inventario) ---
     id_sql_origen = None
