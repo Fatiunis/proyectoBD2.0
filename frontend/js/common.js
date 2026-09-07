@@ -34,21 +34,45 @@ const ICONOS_SVG = {
 };
 
 const VISUAL_CATEGORIA = {
-  2: { icono: "laptop", gradiente: "from-indigo-500 to-blue-600" },
-  3: { icono: "monitor", gradiente: "from-sky-500 to-cyan-600" },
-  5: { icono: "camisa", gradiente: "from-fuchsia-500 to-pink-600" }
+  2: { icono: "laptop", fondo: "bg-[#eeece7]" },
+  3: { icono: "monitor", fondo: "bg-[#e8ebee]" },
+  5: { icono: "camisa", fondo: "bg-[#f2e9e3]" }
 };
 
 function categoriaVisual(idCategoria) {
-  const v = VISUAL_CATEGORIA[idCategoria] || { icono: "generico", gradiente: "from-slate-400 to-slate-600" };
+  const v = VISUAL_CATEGORIA[idCategoria] || { icono: "generico", fondo: "bg-neutral-100" };
   return { ...v, svg: ICONOS_SVG[v.icono] };
 }
 
-function miniaturaCategoriaHtml(idCategoria, alturaClase = "h-36") {
-  const { svg, gradiente } = categoriaVisual(idCategoria);
-  return `<div class="${alturaClase} w-full bg-gradient-to-br ${gradiente} flex items-center justify-center text-white/90">
-    <div class="w-12 h-12">${svg}</div>
+function miniaturaCategoriaHtml(idCategoria, alturaClase = "h-56") {
+  const { svg, fondo } = categoriaVisual(idCategoria);
+  return `<div class="${alturaClase} w-full rounded-2xl ${fondo} flex items-center justify-center text-neutral-800/70">
+    <div class="w-10 h-10">${svg}</div>
   </div>`;
+}
+
+// --- Foto real del producto (si existe) con respaldo automático al ícono de categoría ---
+// El respaldo se resuelve con una función real (manejarErrorImagenProducto), no con HTML
+// incrustado dentro del atributo onerror="": el ícono de respaldo trae su propio class="..."
+// con comillas dobles, que cerrarían el atributo onerror="" antes de tiempo y corrompen el
+// parseo del HTML (efecto observado: la imagen y su texto se separan en celdas del grid).
+function productoImagenHtml(producto, alturaClase = "h-56") {
+  const imagenes = producto.imagenes || [];
+  const portada = imagenes.find(img => img.es_portada) || imagenes[0];
+  if (!portada || !portada.url) {
+    return miniaturaCategoriaHtml(producto.categoria.id_categoria, alturaClase);
+  }
+  const nombreEscapado = producto.nombre.replace(/"/g, "&quot;");
+  return `<div class="${alturaClase} w-full rounded-2xl overflow-hidden bg-neutral-100">
+    <img src="${portada.url}" alt="${nombreEscapado}" loading="lazy"
+      class="w-full h-full object-cover"
+      onerror="manejarErrorImagenProducto(this, ${producto.categoria.id_categoria}, '${alturaClase}')" />
+  </div>`;
+}
+
+function manejarErrorImagenProducto(img, idCategoria, alturaClase) {
+  const contenedor = img.closest("div");
+  if (contenedor) contenedor.outerHTML = miniaturaCategoriaHtml(idCategoria, alturaClase);
 }
 
 // --- Notificaciones (toast) ---
@@ -59,12 +83,12 @@ function toast(mensaje, tipo = "info") {
     return;
   }
   const estilos = {
-    success: "bg-emerald-600",
+    success: "bg-neutral-950",
     error: "bg-red-600",
-    info: "bg-slate-800"
+    info: "bg-neutral-950"
   };
   const el = document.createElement("div");
-  el.className = `${estilos[tipo] || estilos.info} text-white text-sm font-medium px-4 py-3 rounded-lg shadow-lg max-w-xs transition-all duration-300 opacity-0 translate-y-2`;
+  el.className = `${estilos[tipo] || estilos.info} text-white text-sm font-medium px-4 py-3 rounded-full shadow-lg max-w-xs transition-all duration-300 opacity-0 translate-y-2`;
   el.textContent = mensaje;
   contenedor.appendChild(el);
 

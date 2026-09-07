@@ -33,18 +33,41 @@ function mostrarVista(vista) {
   if (vista === "catalogo") cargarProductos();
 }
 
-// Puebla el filtro de categoría desde PostgreSQL (fuente de verdad de la taxonomía),
+// Puebla las pestañas de categoría desde PostgreSQL (fuente de verdad de la taxonomía),
 // no desde una lista fija en el frontend, así una categoría nueva del administrador
 // aparece aquí sin tocar código. Se excluyen las categorías "contenedoras" (sin
 // atributos propios, ej. "Tecnología") porque ningún producto se asigna a ellas
 // directamente — solo a sus subcategorías (Laptops, Monitores, Zapatos, etc.).
+let categoriasDisponibles = [];
+let categoriaSeleccionada = "";
+
 async function cargarOpcionesCategoria() {
   const { data: categorias } = await apiFetch("/categorias");
-  const asignables = (categorias || []).filter(c => (c.esquema_atributos || []).length > 0);
+  categoriasDisponibles = (categorias || []).filter(c => (c.esquema_atributos || []).length > 0);
+  renderTabsCategoria();
+}
 
-  const sel = document.getElementById("filtro-categoria");
-  sel.innerHTML = '<option value="">Todas las categorías</option>' +
-    asignables.map(c => `<option value="${c.id_categoria}">${c.nombre}</option>`).join("");
+function renderTabsCategoria() {
+  const cont = document.getElementById("tabs-categoria");
+  const tabs = [{ id_categoria: "", nombre: "Todas" }, ...categoriasDisponibles];
+  cont.innerHTML = tabs.map(c => {
+    const activa = String(c.id_categoria) === String(categoriaSeleccionada);
+    return `<button onclick="seleccionarCategoria('${c.id_categoria}')" class="px-4 py-3 text-sm font-semibold whitespace-nowrap border-b-2 transition ${activa ? "border-neutral-950 text-neutral-950" : "border-transparent text-neutral-400 hover:text-neutral-700"}">${c.nombre}</button>`;
+  }).join("");
+}
+
+async function seleccionarCategoria(idCategoria) {
+  categoriaSeleccionada = idCategoria;
+  renderTabsCategoria();
+  await cargarFiltrosAtributos(idCategoria);
+  cargarProductos();
+}
+
+// --- BÚSQUEDA ---
+let debounceBusqueda = null;
+function onBuscarProductos() {
+  clearTimeout(debounceBusqueda);
+  debounceBusqueda = setTimeout(() => mostrarVista("catalogo"), 350);
 }
 
 // --- AUTENTICACIÓN (clientes) ---
@@ -107,11 +130,6 @@ function cerrarSesion() {
 // no se mantiene una lista fija de atributos por categoría en el frontend).
 let esquemaFiltrosActual = [];
 
-async function onCambioCategoria() {
-  await cargarFiltrosAtributos(document.getElementById("filtro-categoria").value);
-  cargarProductos();
-}
-
 async function cargarFiltrosAtributos(catId) {
   const contenedor = document.getElementById("filtros-atributos");
   const controles = document.getElementById("filtros-atributos-controles");
@@ -137,8 +155,8 @@ async function cargarFiltrosAtributos(catId) {
     if (f.tipo === "seleccion") {
       return `
         <div>
-          <label class="block text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1">${etiqueta}</label>
-          <select id="filtro-attr-${f.clave}" onchange="cargarProductos()" class="appearance-none border border-slate-200 rounded-lg bg-slate-50 hover:bg-slate-100 text-sm px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none transition cursor-pointer">
+          <label class="block text-[10px] font-semibold uppercase tracking-wide text-neutral-400 mb-1.5">${etiqueta}</label>
+          <select id="filtro-attr-${f.clave}" onchange="cargarProductos()" class="appearance-none border-0 border-b border-neutral-300 hover:border-neutral-950 bg-transparent text-sm px-0 py-1 focus:ring-0 focus:border-neutral-950 outline-none transition cursor-pointer">
             <option value="">Todos</option>
             ${f.valores.map(v => `<option value="${v}">${v}</option>`).join("")}
           </select>
@@ -147,11 +165,11 @@ async function cargarFiltrosAtributos(catId) {
     }
     return `
       <div>
-        <label class="block text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1">${etiqueta} (${f.min}–${f.max})</label>
+        <label class="block text-[10px] font-semibold uppercase tracking-wide text-neutral-400 mb-1.5">${etiqueta} (${f.min}–${f.max})</label>
         <div class="flex items-center gap-1.5">
-          <input type="number" id="filtro-attr-${f.clave}-min" placeholder="${f.min}" step="any" onchange="cargarProductos()" class="w-20 border border-slate-200 rounded-lg bg-slate-50 hover:bg-slate-100 text-sm px-2 py-1.5 focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none transition">
-          <span class="text-slate-300 text-xs">–</span>
-          <input type="number" id="filtro-attr-${f.clave}-max" placeholder="${f.max}" step="any" onchange="cargarProductos()" class="w-20 border border-slate-200 rounded-lg bg-slate-50 hover:bg-slate-100 text-sm px-2 py-1.5 focus:ring-2 focus:ring-indigo-500 focus:bg-white outline-none transition">
+          <input type="number" id="filtro-attr-${f.clave}-min" placeholder="${f.min}" step="any" onchange="cargarProductos()" class="w-16 border-0 border-b border-neutral-300 hover:border-neutral-950 bg-transparent text-sm px-0 py-1 focus:ring-0 focus:border-neutral-950 outline-none transition">
+          <span class="text-neutral-300 text-xs">–</span>
+          <input type="number" id="filtro-attr-${f.clave}-max" placeholder="${f.max}" step="any" onchange="cargarProductos()" class="w-16 border-0 border-b border-neutral-300 hover:border-neutral-950 bg-transparent text-sm px-0 py-1 focus:ring-0 focus:border-neutral-950 outline-none transition">
         </div>
       </div>
     `;
@@ -176,9 +194,11 @@ function limpiarFiltrosAtributos() {
 }
 
 async function cargarProductos() {
-  const cat = document.getElementById("filtro-categoria").value;
   const params = new URLSearchParams();
-  if (cat) params.set("categoria_id", cat);
+  if (categoriaSeleccionada) params.set("categoria_id", categoriaSeleccionada);
+
+  const q = document.getElementById("buscador-productos")?.value.trim();
+  if (q) params.set("q", q);
 
   esquemaFiltrosActual.forEach(f => {
     if (f.tipo === "seleccion") {
@@ -208,21 +228,22 @@ async function cargarProductos() {
   productos.forEach(p => {
     let atributosHtml = "";
     for (const [key, val] of Object.entries(p.atributos || {})) {
-      atributosHtml += `<div class="text-xs text-slate-500"><span class="font-medium text-slate-700">${key.replaceAll("_", " ")}:</span> ${Array.isArray(val) ? val.join(", ") : val}</div>`;
+      atributosHtml += `<div class="text-xs text-neutral-500"><span class="font-medium text-neutral-700">${key.replaceAll("_", " ")}:</span> ${Array.isArray(val) ? val.join(", ") : val}</div>`;
     }
 
     grid.innerHTML += `
-      <div onclick="verDetalleProducto('${p._id}')" class="cursor-pointer bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col justify-between hover:shadow-lg hover:-translate-y-0.5 hover:border-indigo-200 transition-all duration-200">
-        ${miniaturaCategoriaHtml(p.categoria.id_categoria)}
-        <div class="p-4 flex-grow">
-          <span class="text-[10px] font-bold uppercase px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full">${p.categoria.nombre}</span>
-          <h3 class="font-bold text-slate-900 text-base mt-2 leading-snug">${p.nombre}</h3>
-          <p class="text-indigo-600 font-extrabold text-xl my-2">Q${p.precio_base.toFixed(2)}</p>
-          <div class="space-y-1">
+      <div onclick="verDetalleProducto('${p._id}')" class="cursor-pointer group">
+        <div class="overflow-hidden rounded-2xl">
+          <div class="transition-transform duration-500 group-hover:scale-[1.03]">${productoImagenHtml(p)}</div>
+        </div>
+        <div class="pt-4">
+          <p class="text-[10px] font-semibold uppercase tracking-[0.15em] text-neutral-400">${p.categoria.nombre}</p>
+          <h3 class="font-semibold text-neutral-950 text-[15px] mt-1 leading-snug">${p.nombre}</h3>
+          <p class="text-accent-700 font-bold text-lg mt-1.5">Q${p.precio_base.toFixed(2)}</p>
+          <div class="mt-2 space-y-0.5">
             ${atributosHtml}
           </div>
         </div>
-        <div class="px-4 py-2.5 bg-slate-50 border-t border-slate-100 text-[11px] text-slate-400 font-mono">${p.sku} · ${p._id}</div>
       </div>
     `;
   });
@@ -237,25 +258,25 @@ async function verDetalleProducto(id) {
 
   let atributosHtml = "";
   for (const [key, val] of Object.entries(p.atributos || {})) {
-    atributosHtml += `<div class="text-sm text-slate-600"><span class="font-semibold text-slate-800">${key.replaceAll("_", " ")}:</span> ${Array.isArray(val) ? val.join(", ") : val}</div>`;
+    atributosHtml += `<div class="text-sm text-neutral-600"><span class="font-semibold text-neutral-800">${key.replaceAll("_", " ")}:</span> ${Array.isArray(val) ? val.join(", ") : val}</div>`;
   }
 
   document.getElementById("detalle-contenido").innerHTML = `
-    ${miniaturaCategoriaHtml(p.categoria.id_categoria, "h-44")}
-    <div class="p-6">
-      <span class="text-[10px] font-bold uppercase px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full">${p.categoria.nombre}</span>
-      <h2 class="text-2xl font-extrabold text-slate-900 mt-2">${p.nombre}</h2>
-      <p class="text-indigo-600 font-extrabold text-2xl my-2">Q${p.precio_base.toFixed(2)}</p>
-      <p class="text-sm text-slate-600 mb-4">${p.descripcion}</p>
-      <div class="bg-slate-50 border border-slate-100 rounded-lg p-3.5 space-y-1 mb-4">
-        <h4 class="text-xs font-bold uppercase text-slate-500 mb-1.5">Atributos</h4>
-        ${atributosHtml || '<span class="text-xs text-slate-400">Sin atributos registrados</span>'}
+    <div class="p-1">${productoImagenHtml(p, "h-56")}</div>
+    <div class="p-7">
+      <p class="text-[10px] font-semibold uppercase tracking-[0.15em] text-neutral-400">${p.categoria.nombre}</p>
+      <h2 class="text-2xl font-extrabold text-neutral-950 tracking-tight mt-1.5">${p.nombre}</h2>
+      <p class="text-accent-700 font-bold text-2xl mt-1.5 mb-3">Q${p.precio_base.toFixed(2)}</p>
+      <p class="text-sm text-neutral-600 leading-relaxed mb-5">${p.descripcion}</p>
+      <div class="border-t border-neutral-200 pt-4 mb-4">
+        <h4 class="text-[10px] font-semibold uppercase tracking-wide text-neutral-400 mb-2">Atributos</h4>
+        <div class="space-y-1">${atributosHtml || '<span class="text-xs text-neutral-400">Sin atributos registrados</span>'}</div>
       </div>
-      <div class="text-xs text-slate-500 space-y-1 border-t border-slate-100 pt-3">
-        <div><span class="font-semibold">SKU:</span> ${p.sku}</div>
-        <div><span class="font-semibold">ID:</span> <span class="font-mono">${p._id}</span></div>
-        <div><span class="font-semibold">Stock disponible:</span> ${p.stock_disponible ?? "N/D"}</div>
-        <div><span class="font-semibold">Vendedor:</span> ${p.vendedor ? p.vendedor.nombre_comercial : "N/D"}</div>
+      <div class="text-xs text-neutral-400 space-y-1 border-t border-neutral-200 pt-4">
+        <div><span class="font-medium text-neutral-600">SKU</span> · ${p.sku}</div>
+        <div><span class="font-medium text-neutral-600">ID</span> · <span class="font-mono">${p._id}</span></div>
+        <div><span class="font-medium text-neutral-600">Stock disponible</span> · ${p.stock_disponible ?? "N/D"}</div>
+        <div><span class="font-medium text-neutral-600">Vendedor</span> · ${p.vendedor ? p.vendedor.nombre_comercial : "N/D"}</div>
       </div>
     </div>
   `;

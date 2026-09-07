@@ -4,14 +4,16 @@ Portal de comercio electrónico con arquitectura de datos políglota (proyecto d
 
 - **PostgreSQL**: usuarios/autenticación, direcciones, categorías, pedidos, líneas de pedido, pagos, inventario, y el procedimiento transaccional de checkout.
 - **MongoDB**: catálogo de productos (atributos polimórficos por categoría) e historial de cambios (event sourcing) para reconstruir el estado de un producto en cualquier fecha.
-- **Backend**: Flask (`backend/main.py`), expone una API REST consumida por el frontend.
-- **Frontend**: HTML + Tailwind (CDN) + JS vanilla, sin build step — `frontend/index.html` (sitio público) y `frontend/admin.html` (panel administrativo).
+- **Backend**: Flask con application factory (`backend/main.py` → `backend/app/create_app()`), organizado en **Blueprints** por dominio y **SQLAlchemy** para todo el acceso a PostgreSQL. Expone una API REST consumida por el frontend.
+- **Frontend**: hay dos implementaciones equivalentes en el repo mientras dura la migración — ver la sección [Frontend: vanilla vs. Vue](#frontend-vanilla-vs-vue) más abajo antes de decidir cuál levantar.
 
 ## Estado del proyecto
 
 **Fase Inicial** — completa: esquema relacional en 3FN, datos semilla, checkout como transacción atómica (`sp_procesar_checkout`, con bloqueo pesimista y rollback automático) expuesto en `POST /api/checkout`.
 
-**Entrega 1** — completa en código: catálogo documental con atributos por categoría, migración Postgres→Mongo, índice compuesto, consultas de agregación, historial de cambios con reconstrucción point-in-time, panel admin (catálogo, usuarios, historial).
+**Entrega 1** — completa en código: catálogo documental con atributos por categoría, migración Postgres→Mongo, índice compuesto, índice de texto para búsqueda, consultas de agregación, historial de cambios con reconstrucción point-in-time, panel admin (catálogo, categorías, usuarios, historial).
+
+**Migración a frameworks** — completa en código y verificada, backend y frontend: Flask reorganizado en Blueprints + SQLAlchemy, y un sitio Vue 3 + Vite equivalente al vanilla (sitio público con carrito/checkout y panel admin completo). Detalle técnico completo, decisiones y estado exacto de cada pieza en [`docs/STACK.md`](docs/STACK.md).
 
 **Pendiente (documentación, no código):** diagrama entidad-relación, registro de decisión de embeber/referenciar (reseñas, imágenes, vendedor), informe de Entrega 1, y una nota explícita sobre cómo `lineas_pedido` (relacional) se relaciona con los productos que ahora viven en Mongo.
 
@@ -22,6 +24,7 @@ Portal de comercio electrónico con arquitectura de datos políglota (proyecto d
 - Python 3.10+
 - PostgreSQL corriendo localmente (o accesible por red)
 - MongoDB corriendo localmente (o accesible por red)
+- Node.js `^20.19.0` o `>=22.12.0` + npm — **solo si vas a levantar el frontend Vue** (`frontend/app/`, ver más abajo); el sitio vanilla no lo necesita.
 
 ## Instalación
 
@@ -88,13 +91,13 @@ python -c "import psycopg2, os; from dotenv import load_dotenv; load_dotenv(); c
 
 ### 4. Migrar el catálogo a MongoDB
 
-Con PostgreSQL ya poblado (los 9 productos), corre la migración — es idempotente: si la vuelves a correr, recrea las colecciones desde cero.
+Con PostgreSQL ya poblado (los 9 productos), corre la migración — es idempotente: si la vuelves a correr, **recrea las colecciones desde cero** (`drop()` + reinserción), así que es seguro correrla de nuevo cada vez que haces `pull` de una rama que la haya tocado.
 
 ```bash
 python database/migrations/migracion_postgres_a_mongo.py
 ```
 
-Esto crea `productos` y `historial_cambios_productos` en Mongo, con los eventos iniciales de creación y los índices (`idx_categoria_activo_precio`, `idx_sku_unico`, `idx_historial_producto_fecha`).
+Esto crea `productos` y `historial_cambios_productos` en Mongo, con los eventos iniciales de creación, fotos reales por producto (Unsplash, mapeadas por SKU en el propio script) y los índices (`idx_categoria_activo_precio`, `idx_sku_unico`, `idx_historial_producto_fecha`, `idx_texto_busqueda` para la búsqueda por texto del catálogo). **Si ya tenías el catálogo migrado de antes de esta rama, vuelve a correr este script** para que tu Mongo local quede con las mismas imágenes y el mismo índice de texto que el resto del equipo.
 
 ### 5. Levantar el backend
 
@@ -102,11 +105,14 @@ Esto crea `productos` y `historial_cambios_productos` en Mongo, con los eventos 
 python backend/main.py
 ```
 
-Flask queda escuchando en `http://127.0.0.1:8000`.
+Flask queda escuchando en `http://127.0.0.1:8000`. Internamente `backend/main.py` solo llama a `create_app()`; las rutas reales viven organizadas por dominio en `backend/app/blueprints/` (ver estructura más abajo o `docs/STACK.md` para el detalle completo).
 
 ### 6. Servir el frontend
 
-El frontend usa `fetch` contra el backend, así que sírvelo con un servidor estático (abrirlo como `file://` también funciona en la mayoría de navegadores, pero un servidor local es más consistente):
+<a id="frontend-vanilla-vs-vue"></a>
+Hay dos frontends equivalentes en el repo mientras dura la migración a frameworks. Ambos hablan con el mismo backend (`http://127.0.0.1:8000`), así que puedes levantar cualquiera de los dos (o ambos a la vez) sin repetir los pasos 1-5.
+
+**Opción A — Sitio vanilla (`frontend/`, HTML + JS + Tailwind CDN, sin build step).** Es el que está activo en producción hoy:
 
 ```bash
 cd frontend
@@ -116,25 +122,46 @@ python -m http.server 8080
 - Sitio público: `http://127.0.0.1:8080/index.html`
 - Panel admin: `http://127.0.0.1:8080/admin.html`
 
+**Opción B — Sitio Vue 3 + Vite (`frontend/app/`).** Réplica funcional completa del vanilla (sitio público con catálogo/carrito/checkout y panel admin con catálogo/categorías/usuarios/historial), migración verificada end-to-end contra el backend real — ver `docs/STACK.md` para el detalle de qué se probó. Todavía no reemplaza al sitio vanilla en producción (el corte se hace cuando el equipo lo decida), pero ya es completamente usable para desarrollo:
+
+```bash
+cd frontend/app
+npm install
+npm run dev
+```
+
+Vite queda escuchando en `http://localhost:5173` (o el siguiente puerto libre si ese ya está en uso). Rutas: `/` sitio público, `/admin` panel admin.
+
 ## Credenciales de prueba
 
 Todos los usuarios semilla (`database/postgres/ddl_tiendaya.sql`) usan la misma contraseña: **`Tiendaya123!`**
 
 | Email | Rol | Notas |
 |---|---|---|
-| admin@tiendaya.com | administrador | Único rol que puede entrar a `admin.html` |
-| ventas@techstore.com | vendedor | |
-| contacto@modaurbana.com | vendedor | |
+| admin@tiendaya.com | administrador | Entra al panel admin (`admin.html` o `/admin` en Vue) con acceso completo (catálogo, categorías, usuarios, historial) |
+| ventas@techstore.com | vendedor | También entra al panel admin, pero acotado a su propio catálogo y a "Mis ventas" (sin Categorías/Usuarios) |
+| contacto@modaurbana.com | vendedor | Igual que el anterior |
 | carlos.mendez@email.com | comprador | Tiene dirección de envío registrada (id 1) |
 | sofia.lopez@email.com | comprador | Tiene dirección de envío registrada (id 2) |
 
-El registro público (`index.html`) solo crea cuentas de `comprador`. Para crear cuentas de `vendedor` o `administrador` nuevas, usa la pestaña "Usuarios" del panel admin.
+El registro público (sitio público, vanilla o Vue) solo crea cuentas de `comprador`. Para crear cuentas de `vendedor` o `administrador` nuevas, usa la pestaña "Usuarios" del panel admin.
 
 ## Estructura del repositorio
 
 ```
 backend/
-  main.py                  API Flask (auth, checkout, catálogo, historial)
+  main.py                    Entry point: from app import create_app; app.run(...)
+  app/
+    __init__.py                 create_app(): Flask + CORS + registro de blueprints
+    config.py                    load_dotenv(), PG_CONFIG, MONGO_URI
+    extensions.py                 db (SQLAlchemy), cliente Mongo (col_productos, col_historial)
+    models.py                      Modelos SQLAlchemy: Usuario, Categoria, Producto, Inventario, Pedido, LineaPedido
+    blueprints/
+      auth.py                       /api/auth/register, /api/auth/login, /api/usuarios, /api/usuarios/<id>
+      checkout.py                    /api/checkout
+      catalogo.py                     /api/categorias, /api/categorias/<id>/filtros, /api/productos, /api/productos/<id>
+      historial.py                     /api/historial, /api/historial/<producto_id>
+      vendedores.py                     /api/vendedores/<id>/ventas
 database/
   postgres/
     ddl_tiendaya.sql               Esquema 3FN + semilla + sp_procesar_checkout
@@ -143,14 +170,23 @@ database/
     01_indexes.js                  Índices de referencia (ya se crean también desde la migración)
     02_aggregation_queries.js      Consultas de agregación de referencia
   migrations/
-    migracion_postgres_a_mongo.py  ETL: aplana productos de Postgres a documentos Mongo
+    migracion_postgres_a_mongo.py  ETL: aplana productos de Postgres a documentos Mongo + fotos reales por SKU
 frontend/
-  index.html                Sitio público (catálogo, login/registro de comprador)
-  admin.html                 Panel admin (catálogo, usuarios, historial) — login propio
+  index.html                Sitio público vanilla (catálogo, login/registro de comprador)
+  admin.html                 Panel admin vanilla (catálogo, usuarios, historial) — login propio
   js/
     common.js                  API_URL, sesión, toasts, miniaturas por categoría
     public.js                   Lógica de index.html
     admin.js                     Lógica de admin.html
+  app/                        Sitio Vue 3 + Vite (equivalente funcional al vanilla, ver docs/STACK.md)
+    src/
+      views/                       VistaPublica.vue, VistaAdmin.vue
+      components/publico/           Catálogo, filtros, detalle, carrito, checkout, login/registro
+      components/admin/              Catálogo, categorías, usuarios, ventas, historial
+      composables/                    useSesion, useToast, useCategorias, useCarrito
+      services/api.js                 apiFetch (wrapper de fetch contra el backend)
+docs/
+  STACK.md                   Detalle técnico de la migración a frameworks: qué cambió, por qué, y estado exacto
 requirements.txt
 .env.example
 ```
