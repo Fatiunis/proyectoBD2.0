@@ -1,6 +1,6 @@
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -26,6 +26,10 @@ PG_CONFIG = {
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "tiendaya_nosql")
+
+# Guatemala usa UTC-6 fijo todo el año (sin horario de verano), consistente
+# con backend/app/extensions.py.
+ZONA_GUATEMALA = timezone(timedelta(hours=-6))
 
 # ============================================================================
 # FOTOS REALES POR SKU (Unsplash, licencia libre de uso comercial)
@@ -203,7 +207,7 @@ def ejecutar_migracion():
 
     documentos_productos = []
     documentos_historial = []
-    fecha_migracion = datetime.now(timezone.utc)
+    fecha_migracion = datetime.now(ZONA_GUATEMALA)
 
     # 3. Transformación y modelado documental
     for p in productos_pg:
