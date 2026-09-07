@@ -5,7 +5,7 @@ Portal de comercio electrónico con arquitectura de datos políglota (proyecto d
 - **PostgreSQL**: usuarios/autenticación, direcciones, categorías, pedidos, líneas de pedido, pagos, inventario, y el procedimiento transaccional de checkout.
 - **MongoDB**: catálogo de productos (atributos polimórficos por categoría) e historial de cambios (event sourcing) para reconstruir el estado de un producto en cualquier fecha.
 - **Backend**: Flask con application factory (`backend/main.py` → `backend/app/create_app()`), organizado en **Blueprints** por dominio y **SQLAlchemy** para todo el acceso a PostgreSQL. Expone una API REST consumida por el frontend.
-- **Frontend**: hay dos implementaciones equivalentes en el repo mientras dura la migración — ver la sección [Frontend: vanilla vs. Vue](#frontend-vanilla-vs-vue) más abajo antes de decidir cuál levantar.
+- **Frontend**: **Vue 3 + Vite + Tailwind v4** (`frontend/app/`) — sitio público (catálogo, carrito, checkout) y panel admin (catálogo, categorías, usuarios, ventas, historial).
 
 ## Estado del proyecto
 
@@ -13,7 +13,7 @@ Portal de comercio electrónico con arquitectura de datos políglota (proyecto d
 
 **Entrega 1** — completa en código: catálogo documental con atributos por categoría, migración Postgres→Mongo, índice compuesto, índice de texto para búsqueda, consultas de agregación, historial de cambios con reconstrucción point-in-time, panel admin (catálogo, categorías, usuarios, historial).
 
-**Migración a frameworks** — completa en código y verificada, backend y frontend: Flask reorganizado en Blueprints + SQLAlchemy, y un sitio Vue 3 + Vite equivalente al vanilla (sitio público con carrito/checkout y panel admin completo). Detalle técnico completo, decisiones y estado exacto de cada pieza en [`docs/STACK.md`](docs/STACK.md).
+**Migración a frameworks** — completa: backend reorganizado en Blueprints + SQLAlchemy, y frontend migrado por completo a Vue 3 + Vite (sitio público con carrito/checkout y panel admin completo). El sitio HTML/JS vanilla original ya se retiró del repositorio — Vue es ahora el único frontend. Detalle técnico completo, decisiones y estado exacto de cada pieza en [`docs/STACK.md`](docs/STACK.md).
 
 **Pendiente (documentación, no código):** diagrama entidad-relación, registro de decisión de embeber/referenciar (reseñas, imágenes, vendedor), informe de Entrega 1, y una nota explícita sobre cómo `lineas_pedido` (relacional) se relaciona con los productos que ahora viven en Mongo.
 
@@ -24,7 +24,7 @@ Portal de comercio electrónico con arquitectura de datos políglota (proyecto d
 - Python 3.10+
 - PostgreSQL corriendo localmente (o accesible por red)
 - MongoDB corriendo localmente (o accesible por red)
-- Node.js `^20.19.0` o `>=22.12.0` + npm — **solo si vas a levantar el frontend Vue** (`frontend/app/`, ver más abajo); el sitio vanilla no lo necesita.
+- Node.js `^20.19.0` o `>=22.12.0` + npm (requerido por Vite para levantar el frontend)
 
 ## Instalación
 
@@ -107,22 +107,7 @@ python backend/main.py
 
 Flask queda escuchando en `http://127.0.0.1:8000`. Internamente `backend/main.py` solo llama a `create_app()`; las rutas reales viven organizadas por dominio en `backend/app/blueprints/` (ver estructura más abajo o `docs/STACK.md` para el detalle completo).
 
-### 6. Servir el frontend
-
-<a id="frontend-vanilla-vs-vue"></a>
-Hay dos frontends equivalentes en el repo mientras dura la migración a frameworks. Ambos hablan con el mismo backend (`http://127.0.0.1:8000`), así que puedes levantar cualquiera de los dos (o ambos a la vez) sin repetir los pasos 1-5.
-
-**Opción A — Sitio vanilla (`frontend/`, HTML + JS + Tailwind CDN, sin build step).** Es el que está activo en producción hoy:
-
-```bash
-cd frontend
-python -m http.server 8080
-```
-
-- Sitio público: `http://127.0.0.1:8080/index.html`
-- Panel admin: `http://127.0.0.1:8080/admin.html`
-
-**Opción B — Sitio Vue 3 + Vite (`frontend/app/`).** Réplica funcional completa del vanilla (sitio público con catálogo/carrito/checkout y panel admin con catálogo/categorías/usuarios/historial), migración verificada end-to-end contra el backend real — ver `docs/STACK.md` para el detalle de qué se probó. Todavía no reemplaza al sitio vanilla en producción (el corte se hace cuando el equipo lo decida), pero ya es completamente usable para desarrollo:
+### 6. Levantar el frontend
 
 ```bash
 cd frontend/app
@@ -130,7 +115,9 @@ npm install
 npm run dev
 ```
 
-Vite queda escuchando en `http://localhost:5173` (o el siguiente puerto libre si ese ya está en uso). Rutas: `/` sitio público, `/admin` panel admin.
+Vite queda escuchando en `http://localhost:5173` (o el siguiente puerto libre si ese ya está en uso) y habla con el backend en `http://127.0.0.1:8000`. Rutas: `/` sitio público (catálogo, carrito, checkout, login/registro), `/admin` panel admin (catálogo, categorías, usuarios, ventas, historial).
+
+Para un build de producción: `npm run build` (genera `frontend/app/dist/`).
 
 ## Credenciales de prueba
 
@@ -138,13 +125,13 @@ Todos los usuarios semilla (`database/postgres/ddl_tiendaya.sql`) usan la misma 
 
 | Email | Rol | Notas |
 |---|---|---|
-| admin@tiendaya.com | administrador | Entra al panel admin (`admin.html` o `/admin` en Vue) con acceso completo (catálogo, categorías, usuarios, historial) |
-| ventas@techstore.com | vendedor | También entra al panel admin, pero acotado a su propio catálogo y a "Mis ventas" (sin Categorías/Usuarios) |
+| admin@tiendaya.com | administrador | Entra a `/admin` con acceso completo (catálogo, categorías, usuarios, historial) |
+| ventas@techstore.com | vendedor | También entra a `/admin`, pero acotado a su propio catálogo y a "Mis ventas" (sin Categorías/Usuarios) |
 | contacto@modaurbana.com | vendedor | Igual que el anterior |
 | carlos.mendez@email.com | comprador | Tiene dirección de envío registrada (id 1) |
 | sofia.lopez@email.com | comprador | Tiene dirección de envío registrada (id 2) |
 
-El registro público (sitio público, vanilla o Vue) solo crea cuentas de `comprador`. Para crear cuentas de `vendedor` o `administrador` nuevas, usa la pestaña "Usuarios" del panel admin.
+El registro público (`/`) solo crea cuentas de `comprador`. Para crear cuentas de `vendedor` o `administrador` nuevas, usa la pestaña "Usuarios" del panel admin.
 
 ## Estructura del repositorio
 
@@ -172,13 +159,7 @@ database/
   migrations/
     migracion_postgres_a_mongo.py  ETL: aplana productos de Postgres a documentos Mongo + fotos reales por SKU
 frontend/
-  index.html                Sitio público vanilla (catálogo, login/registro de comprador)
-  admin.html                 Panel admin vanilla (catálogo, usuarios, historial) — login propio
-  js/
-    common.js                  API_URL, sesión, toasts, miniaturas por categoría
-    public.js                   Lógica de index.html
-    admin.js                     Lógica de admin.html
-  app/                        Sitio Vue 3 + Vite (equivalente funcional al vanilla, ver docs/STACK.md)
+  app/                        Sitio Vue 3 + Vite (único frontend, ver docs/STACK.md)
     src/
       views/                       VistaPublica.vue, VistaAdmin.vue
       components/publico/           Catálogo, filtros, detalle, carrito, checkout, login/registro

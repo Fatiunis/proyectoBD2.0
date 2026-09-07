@@ -41,10 +41,10 @@ backend/
 
 | Capa | Antes | Plan | Por qué |
 |---|---|---|---|
-| UI | HTML + JS vanilla, sin build step | ✅ **Vue 3** (`^3.5`) con **Vite** (`^8.2`) y **Vue Router** (`^4.6`), scaffold en `frontend/app/` | Curva de aprendizaje suave viniendo de HTML/JS vanilla (sintaxis de plantillas cercana al HTML actual); Vite da un entorno de build oficial, rápido y con configuración mínima. |
+| UI | HTML + JS vanilla, sin build step | ✅ **Vue 3** (`^3.5`) con **Vite** (`^8.2`) y **Vue Router** (`^4.6`), único frontend en `frontend/app/` | Curva de aprendizaje suave viniendo de HTML/JS vanilla (sintaxis de plantillas cercana al HTML actual); Vite da un entorno de build oficial, rápido y con configuración mínima. |
 | Estilos | Tailwind CSS vía CDN | ✅ **Tailwind CSS v4** vía `@tailwindcss/vite` (enfoque CSS-first con `@theme`, sin `tailwind.config.js`) | El CDN de Tailwind no es apto para producción (según la propia documentación de Tailwind); instalarlo como paquete permite purgar CSS no usado y tener autocompletado/tooling. |
 
-**Estado actual:** scaffold ✅, utilidades compartidas ✅, sitio público ✅, panel admin ✅ y QA end-to-end adversarial ✅ completados. La migración a Vue en sí no introdujo regresiones (confirmado por QA: auth, filtros combinados, carrito, sesión, control de acceso admin/vendedor/comprador, checkout de casos de borde — todo correcto). El sitio vanilla (`frontend/index.html`, `frontend/admin.html`, `frontend/js/`) sigue siendo el que está en producción; el corte se hace cuando el usuario lo decida, ya que la migración está funcionalmente lista.
+**Estado actual:** scaffold ✅, utilidades compartidas ✅, sitio público ✅, panel admin ✅, QA end-to-end adversarial ✅ y **corte a producción ✅ (2026-09-07)** completados. La migración a Vue en sí no introdujo regresiones (confirmado por QA: auth, filtros combinados, carrito, sesión, control de acceso admin/vendedor/comprador, checkout de casos de borde — todo correcto). El sitio vanilla original (`frontend/index.html`, `frontend/admin.html`, `frontend/js/`) se eliminó del repositorio a pedido del usuario, una vez confirmado que Vue lo reemplazaba por completo — Vue 3 (`frontend/app/`) es ahora el único frontend del proyecto.
 
 **Bugs reales encontrados por QA (preexistentes en el backend, heredados tal cual por la migración — no son regresiones de Vue/SQLAlchemy):**
 - **F1 (bloqueante) ✅ corregido y verificado (2026-09-07)**: un producto creado desde cero vía admin no tenía `id_sql_origen`, así que nunca podía comprarse. `POST /api/productos` ahora, al dar de alta un producto nuevo, también crea las filas correspondientes en PostgreSQL (`productos` + `inventario`, vía los modelos SQLAlchemy — se agregó el modelo `Inventario` en `backend/app/models.py`) y guarda el `id_producto` resultante como `id_sql_origen` en Mongo. Orden de escritura: primero Postgres (con commit), recién si tiene éxito se escribe Mongo — así nunca queda un documento Mongo huérfano si Postgres falla. Verificado con un checkout real de principio a fin sobre un producto recién creado.
@@ -80,7 +80,7 @@ Pendiente (menor, no bloqueante): F3 y F4, a decidir si se abordan.
 
 Verificado en navegador real: fetch real a `GET /api/categorias` contra el backend Flask, sesión reactiva (set/limpiar), toasts success/error, e `ImagenProducto` con imagen real y con fallback.
 
-Estructura del scaffold:
+Estructura actual (ver el README raíz para la lista completa):
 ```
 frontend/app/
   src/
@@ -89,10 +89,11 @@ frontend/app/
     style.css               # @import "tailwindcss"; + @theme (accent, Inter)
     router/index.js          # rutas "/" y "/admin"
     views/
-      VistaPublica.vue        # placeholder, a reemplazar por el catálogo real
-      VistaAdmin.vue           # placeholder, a reemplazar por el panel real
+      VistaPublica.vue        # sitio público real (catálogo, carrito, checkout, login/registro)
+      VistaAdmin.vue           # panel admin real (catálogo, categorías, usuarios, ventas, historial)
+    components/publico/, components/admin/, composables/, services/, utils/
   vite.config.js           # plugins: vue(), tailwindcss(); puerto 5173
-  README.md                # cómo levantar dev/build vs. el sitio vanilla
+  README.md                # cómo levantar dev/build
 ```
 
 ## Base de datos
@@ -126,3 +127,11 @@ frontend/app/
   en `frontend/app/`, sin tocar el sitio vanilla existente (sigue siendo el
   de producción). Verificado con captura de pantalla en `/` y `/admin`:
   tema Tailwind y enrutamiento funcionan. Sin lógica de negocio migrada aún.
+- 2026-09-07: con la migración a Vue funcionalmente completa y verificada
+  (sitio público + panel admin, QA end-to-end sin regresiones), el usuario
+  decide el corte de producción: se elimina el sitio vanilla original
+  (`frontend/index.html`, `frontend/admin.html`, `frontend/js/`) del
+  repositorio. `frontend/app/` (Vue) queda como el único frontend del
+  proyecto. Se actualiza el README raíz, este documento y
+  `frontend/app/README.md` para reflejar el corte (ya no se documentan "dos
+  frontends", solo Vue).
