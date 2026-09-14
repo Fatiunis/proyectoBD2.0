@@ -16,6 +16,12 @@ PG_CONFIG = {
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+CARRITO_TTL_SEGUNDOS = int(os.getenv("CARRITO_TTL_SEGUNDOS", "1800"))
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "tiendaya123")
+
 # URI de SQLAlchemy armada a partir de PG_CONFIG, para no duplicar la config de conexión.
 # quote_plus escapa caracteres especiales que pudiera tener el usuario/contraseña.
 SQLALCHEMY_DATABASE_URI = (

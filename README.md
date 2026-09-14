@@ -15,9 +15,13 @@ Portal de comercio electrónico con arquitectura de datos políglota (proyecto d
 
 **Migración a frameworks** — completa: backend reorganizado en Blueprints + SQLAlchemy, y frontend migrado por completo a Vue 3 + Vite (sitio público con carrito/checkout y panel admin completo). El sitio HTML/JS vanilla original ya se retiró del repositorio — Vue es ahora el único frontend. Detalle técnico completo, decisiones y estado exacto de cada pieza en [`docs/STACK.md`](docs/STACK.md).
 
+**Entrega 2** — completa: carrito de compra migrado de `localStorage` a **Redis** (expiración de 30 min por inactividad); oferta de inventario limitado ("flash sale") implementada sobre Redis con un script Lua atómico (`EVAL`, sin locks de aplicación), con prueba de concurrencia real (`backend/scripts/prueba_concurrencia_oferta.py`); sistema de reseñas de producto construido desde cero (Mongo, colección `resenas`); y detección de fraude en reseñas sobre **Neo4j** (grafo `Cuenta`-[`CALIFICO`]->`Producto`, consulta Cypher de 3 saltos que identifica cuentas que se califican entre sí de forma reiterada). Decisión de grafos vs. columnar documentada en [`docs/decisiones/ADR-002-grafos-vs-columnar.md`](docs/decisiones/ADR-002-grafos-vs-columnar.md); diagrama de arquitectura actualizado en [`docs/arquitectura.md`](docs/arquitectura.md).
+
 **Pendiente (documentación, no código):** diagrama entidad-relación, registro de decisión de embeber/referenciar (reseñas, imágenes, vendedor), informe de Entrega 1, y una nota explícita sobre cómo `lineas_pedido` (relacional) se relaciona con los productos que ahora viven en Mongo.
 
 **Limitación conocida:** el checkout sigue operando sobre las tablas `productos`/`inventario` de PostgreSQL (no sobre MongoDB). Si editas un producto desde el panel admin, el cambio solo se refleja en Mongo — el checkout seguiría usando el precio/stock de Postgres. Los dos catálogos no se mantienen sincronizados automáticamente tras la migración inicial.
+
+**Limitaciones conocidas de la Entrega 2:** la oferta de inventario limitado vive enteramente en Redis, independiente del `inventario` de PostgreSQL — no descuenta stock real del catálogo, es un cupo aparte para la mecánica de flash sale. La sincronización Mongo → Neo4j al crear una reseña es de mejor esfuerzo (sin 2PC, mismo criterio ya usado entre Postgres/Mongo): si Neo4j no está disponible, la reseña igual se guarda en Mongo y solo se registra una advertencia.
 
 ## Requisitos previos
 
@@ -25,6 +29,7 @@ Portal de comercio electrónico con arquitectura de datos políglota (proyecto d
 - PostgreSQL corriendo localmente (o accesible por red)
 - MongoDB corriendo localmente (o accesible por red)
 - Node.js `^20.19.0` o `>=22.12.0` + npm (requerido por Vite para levantar el frontend)
+- Docker + Docker Compose (para levantar Redis y Neo4j, requeridos desde la Entrega 2)
 
 ## Instalación
 
@@ -57,6 +62,13 @@ PG_PASSWORD=tu_password_local
 
 MONGO_URI=mongodb://localhost:27017/
 MONGO_DB_NAME=tiendaya_nosql
+
+REDIS_URL=redis://localhost:6379/0
+CARRITO_TTL_SEGUNDOS=1800
+
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=tiendaya123
 ```
 
 `.env` está en `.gitignore` — nunca lo subas al repositorio.
@@ -99,7 +111,35 @@ python database/migrations/migracion_postgres_a_mongo.py
 
 Esto crea `productos` y `historial_cambios_productos` en Mongo, con los eventos iniciales de creación, fotos reales por producto (Unsplash, mapeadas por SKU en el propio script) y los índices (`idx_categoria_activo_precio`, `idx_sku_unico`, `idx_historial_producto_fecha`, `idx_texto_busqueda` para la búsqueda por texto del catálogo). **Si ya tenías el catálogo migrado de antes de esta rama, vuelve a correr este script** para que tu Mongo local quede con las mismas imágenes y el mismo índice de texto que el resto del equipo.
 
-### 5. Levantar el backend
+### 5. Levantar Redis y Neo4j, y sembrar datos de la Entrega 2
+
+Desde la raíz del repo:
+
+```bash
+docker compose up -d
+```
+
+Levanta Redis (puerto `6379`, usado por el carrito y la oferta de inventario limitado) y Neo4j (puertos `7474` browser / `7687` bolt, usuario `neo4j` / contraseña `tiendaya123` — usado por la detección de fraude en reseñas). Dale unos 15-20 segundos a Neo4j antes de usarlo, tarda más que Redis en quedar listo (`docker compose logs neo4j` hasta ver `Started.`).
+
+Aplica las constraints de unicidad del grafo (una sola vez):
+
+```bash
+docker compose exec neo4j cypher-shell -u neo4j -p tiendaya123 -f /dev/stdin < database/neo4j/01_constraints.cypher
+```
+
+Amplía la semilla de compradores (necesaria para que la detección de fraude tenga variedad de cuentas — es segura de correr aunque tu base ya tenga usuarios propios, usa `ON CONFLICT (email) DO NOTHING` en vez de IDs fijos):
+
+```bash
+psql -U postgres -d tiendaya_db -f database/postgres/datos_semilla_usuarios.sql
+```
+
+Siembra reseñas de prueba con un patrón de fraude detectable (ruido legítimo + un grupo de cuentas que se recalifican entre sí + un par de control que no debería marcarse como sospechoso). Es idempotente — se puede volver a correr sin duplicar datos:
+
+```bash
+python database/migrations/sembrar_resenas_fraude.py
+```
+
+### 6. Levantar el backend
 
 ```bash
 python backend/main.py
@@ -107,7 +147,7 @@ python backend/main.py
 
 Flask queda escuchando en `http://127.0.0.1:8000`. Internamente `backend/main.py` solo llama a `create_app()`; las rutas reales viven organizadas por dominio en `backend/app/blueprints/` (ver estructura más abajo o `docs/STACK.md` para el detalle completo).
 
-### 6. Levantar el frontend
+### 7. Levantar el frontend
 
 ```bash
 cd frontend/app
@@ -115,7 +155,7 @@ npm install
 npm run dev
 ```
 
-Vite queda escuchando en `http://localhost:5173` (o el siguiente puerto libre si ese ya está en uso) y habla con el backend en `http://127.0.0.1:8000`. Rutas: `/` sitio público (catálogo, carrito, checkout, login/registro), `/admin` panel admin (catálogo, categorías, usuarios, ventas, historial).
+Vite queda escuchando en `http://localhost:5173` (o el siguiente puerto libre si ese ya está en uso) y habla con el backend en `http://127.0.0.1:8000`. Rutas: `/` sitio público (catálogo, carrito, checkout, login/registro), `/producto/:id` detalle de producto (reseñas y oferta de inventario limitado si el producto tiene una activa), `/admin` panel admin (catálogo, categorías, usuarios, ventas, historial, fraude — este último solo para administrador).
 
 Para un build de producción: `npm run build` (genera `frontend/app/dist/`).
 
@@ -133,41 +173,59 @@ Todos los usuarios semilla (`database/postgres/ddl_tiendaya.sql`) usan la misma 
 
 El registro público (`/`) solo crea cuentas de `comprador`. Para crear cuentas de `vendedor` o `administrador` nuevas, usa la pestaña "Usuarios" del panel admin.
 
+Tras correr `database/postgres/datos_semilla_usuarios.sql` (paso 5 de la instalación) hay 10 compradores adicionales (misma contraseña `Tiendaya123!`), por ejemplo `maria.torres@email.com` — necesarios para que la detección de fraude en reseñas tenga variedad de cuentas para analizar.
+
 ## Estructura del repositorio
 
 ```
 backend/
-  main.py                    Entry point: from app import create_app; app.run(...)
+  main.py                    Entry point: from app import create_app; app.run(..., threaded=True)
   app/
     __init__.py                 create_app(): Flask + CORS + registro de blueprints
-    config.py                    load_dotenv(), PG_CONFIG, MONGO_URI
-    extensions.py                 db (SQLAlchemy), cliente Mongo (col_productos, col_historial)
+    config.py                    load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, NEO4J_URI...
+    extensions.py                 db (SQLAlchemy), Mongo (col_productos, col_historial, col_resenas), redis_client, neo4j_driver
     models.py                      Modelos SQLAlchemy: Usuario, Categoria, Producto, Inventario, Pedido, LineaPedido
+    lua/
+      reservar_oferta.lua           Check-and-decrement atómico para la oferta de inventario limitado
     blueprints/
       auth.py                       /api/auth/register, /api/auth/login, /api/usuarios, /api/usuarios/<id>
       checkout.py                    /api/checkout
       catalogo.py                     /api/categorias, /api/categorias/<id>/filtros, /api/productos, /api/productos/<id>
       historial.py                     /api/historial, /api/historial/<producto_id>
       vendedores.py                     /api/vendedores/<id>/ventas
+      carrito.py                        /api/carrito/<id_usuario> (Redis, Entrega 2)
+      ofertas.py                        /api/ofertas, /api/ofertas/<producto_id>/reservar (Redis + Lua, Entrega 2)
+      resenas.py                        /api/resenas (Mongo + sync a Neo4j, Entrega 2)
+      fraude.py                         /api/fraude/alertas (consulta Cypher de 3 saltos, Entrega 2)
+  scripts/
+    prueba_concurrencia_oferta.py  Evidencia de que la oferta límite no permite sobreventa bajo concurrencia
 database/
   postgres/
     ddl_tiendaya.sql               Esquema 3FN + semilla + sp_procesar_checkout
     datos_semilla_productos.sql    5 productos adicionales
+    datos_semilla_usuarios.sql     10 compradores adicionales (Entrega 2, IDs dinámicos vía ON CONFLICT)
   mongo/
     01_indexes.js                  Índices de referencia (ya se crean también desde la migración)
     02_aggregation_queries.js      Consultas de agregación de referencia
+  neo4j/
+    01_constraints.cypher          Constraints de unicidad para nodos Cuenta/Producto (Entrega 2)
   migrations/
     migracion_postgres_a_mongo.py  ETL: aplana productos de Postgres a documentos Mongo + fotos reales por SKU
+    sembrar_resenas_fraude.py       Siembra reseñas con un patrón de fraude detectable (Entrega 2, idempotente)
 frontend/
   app/                        Sitio Vue 3 + Vite (único frontend, ver docs/STACK.md)
     src/
-      views/                       VistaPublica.vue, VistaAdmin.vue
+      views/                       VistaPublica.vue, VistaDetalleProducto.vue, VistaAdmin.vue
       components/publico/           Catálogo, filtros, detalle, carrito, checkout, login/registro
-      components/admin/              Catálogo, categorías, usuarios, ventas, historial
-      composables/                    useSesion, useToast, useCategorias, useCarrito
+      components/admin/              Catálogo, categorías, usuarios, ventas, historial, fraude (GestionFraude.vue)
+      composables/                    useSesion, useToast, useCategorias, useCarrito (Redis-backed, Entrega 2)
       services/api.js                 apiFetch (wrapper de fetch contra el backend)
 docs/
   STACK.md                   Detalle técnico de la migración a frameworks: qué cambió, por qué, y estado exacto
+  arquitectura.md            Diagrama de arquitectura actualizado (Entrega 2)
+  decisiones/
+    ADR-002-grafos-vs-columnar.md   Registro de decisión: Neo4j para fraude en reseñas, columnar descartado por ahora
+docker-compose.yml          Redis + Neo4j (Entrega 2)
 requirements.txt
 .env.example
 ```
