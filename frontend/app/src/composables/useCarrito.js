@@ -1,60 +1,129 @@
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
+import { apiFetch } from "../services/api";
+import { useSesion } from "./useSesion";
+import { useToast } from "./useToast";
 
-const CLAVE_CARRITO = "carrito_tiendaya";
+const { sesion } = useSesion();
+const { toast } = useToast();
 
-function leerCarritoInicial() {
-  try {
-    return JSON.parse(localStorage.getItem(CLAVE_CARRITO)) || [];
-  } catch {
-    return [];
+const items = ref([]);
+
+function itemDesdeApi(item) {
+  return {
+    idProducto: item.id_producto,
+    idSqlOrigen: item.id_sql_origen,
+    nombre: item.nombre,
+    precioBase: item.precio_base,
+    idCategoria: item.id_categoria,
+    imagenUrl: item.imagen_url,
+    stockDisponible: item.stock_disponible,
+    cantidad: item.cantidad,
+  };
+}
+
+function avisarError(data) {
+  toast(data?.error || "No se pudo actualizar el carrito", "error");
+}
+
+async function cargarCarrito() {
+  if (!sesion.value) return;
+  const { ok, data } = await apiFetch(`/carrito/${sesion.value.id_usuario}`);
+  if (ok) {
+    items.value = (data.items || []).map(itemDesdeApi);
+  } else {
+    avisarError(data);
   }
 }
 
-const items = ref(leerCarritoInicial());
+watch(sesion, (actual, anterior) => {
+  if (actual && !anterior) {
+    cargarCarrito();
+  } else if (!actual) {
+    items.value = [];
+  }
+});
 
-function persistir() {
-  localStorage.setItem(CLAVE_CARRITO, JSON.stringify(items.value));
+if (sesion.value) {
+  cargarCarrito();
 }
 
-function agregar(producto, cantidad = 1) {
+async function agregar(producto, cantidad = 1) {
+  if (!sesion.value) {
+    toast("Debes iniciar sesión para agregar productos al carrito", "error");
+    return;
+  }
+
   const stock = producto.stock_disponible ?? Infinity;
+  const imagenes = producto.imagenes || [];
+  const portada = imagenes.find((img) => img.es_portada) || imagenes[0];
+  const imagenUrl = portada?.url || null;
   const existente = items.value.find((i) => i.idProducto === producto._id);
 
   if (existente) {
     existente.cantidad = Math.min(existente.cantidad + cantidad, stock);
   } else {
-    const imagenes = producto.imagenes || [];
-    const portada = imagenes.find((img) => img.es_portada) || imagenes[0];
     items.value.push({
       idProducto: producto._id,
       idSqlOrigen: producto.id_sql_origen,
       nombre: producto.nombre,
       precioBase: producto.precio_base,
       idCategoria: producto.categoria?.id_categoria,
-      imagenUrl: portada?.url || null,
+      imagenUrl,
       stockDisponible: stock,
       cantidad: Math.min(Math.max(cantidad, 1), stock),
     });
   }
-  persistir();
+
+  // Mutación optimista ya aplicada arriba; si la llamada al backend falla solo
+  // avisamos con un toast, sin revertir el estado local (suficiente para esta entrega).
+  const { ok, data } = await apiFetch(`/carrito/${sesion.value.id_usuario}/items`, {
+    method: "POST",
+    body: JSON.stringify({
+      id_producto: producto._id,
+      id_sql_origen: producto.id_sql_origen,
+      nombre: producto.nombre,
+      precio_base: producto.precio_base,
+      id_categoria: producto.categoria?.id_categoria,
+      imagen_url: imagenUrl,
+      stock_disponible: stock,
+      cantidad,
+    }),
+  });
+  if (!ok) avisarError(data);
 }
 
-function actualizarCantidad(idProducto, cantidad) {
+async function actualizarCantidad(idProducto, cantidad) {
   const item = items.value.find((i) => i.idProducto === idProducto);
   if (!item) return;
   const tope = item.stockDisponible ?? cantidad;
   item.cantidad = Math.max(1, Math.min(cantidad, tope));
-  persistir();
+
+  if (!sesion.value) return;
+  const { ok, data } = await apiFetch(`/carrito/${sesion.value.id_usuario}/items/${idProducto}`, {
+    method: "PUT",
+    body: JSON.stringify({ cantidad }),
+  });
+  if (!ok) avisarError(data);
 }
 
-function quitar(idProducto) {
+async function quitar(idProducto) {
   items.value = items.value.filter((i) => i.idProducto !== idProducto);
-  persistir();
+
+  if (!sesion.value) return;
+  const { ok, data } = await apiFetch(`/carrito/${sesion.value.id_usuario}/items/${idProducto}`, {
+    method: "DELETE",
+  });
+  if (!ok) avisarError(data);
 }
 
-function vaciar() {
+async function vaciar() {
   items.value = [];
-  persistir();
+
+  if (!sesion.value) return;
+  const { ok, data } = await apiFetch(`/carrito/${sesion.value.id_usuario}`, {
+    method: "DELETE",
+  });
+  if (!ok) avisarError(data);
 }
 
 const cantidadTotal = computed(() => items.value.reduce((acc, i) => acc + i.cantidad, 0));

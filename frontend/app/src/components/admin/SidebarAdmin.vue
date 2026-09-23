@@ -44,6 +44,9 @@ function claseBoton(tab, tabActual) {
       <button @click="emit('cambiar-tab', 'historial')" :class="claseBoton('historial', tabActual)">
         <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span> Historial
       </button>
+      <button v-if="!esVendedor" @click="emit('cambiar-tab', 'fraude')" :class="claseBoton('fraude', tabActual)">
+        <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span> Fraude
+      </button>
     </nav>
 
     <div class="px-4 py-4 border-t border-neutral-800">

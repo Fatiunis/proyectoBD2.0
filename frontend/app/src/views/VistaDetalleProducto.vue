@@ -6,6 +6,8 @@ import { useToast } from "../composables/useToast";
 import { useCarrito } from "../composables/useCarrito";
 import NavPublica from "../components/publico/NavPublica.vue";
 import ImagenProducto from "../components/ImagenProducto.vue";
+import OfertaLimitada from "../components/publico/OfertaLimitada.vue";
+import ResenasProducto from "../components/publico/ResenasProducto.vue";
 
 const props = defineProps({
   id: { type: String, required: true },
@@ -108,8 +110,12 @@ function onBuscar(texto) {
               class="flex-1 py-3.5 bg-neutral-950 hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-neutral-950 text-white font-semibold rounded-full text-sm transition"
             >{{ producto.stock_disponible ? "Agregar al carrito" : "Sin stock" }}</button>
           </div>
+
+          <OfertaLimitada :producto-id="producto._id" />
         </div>
       </div>
+
+      <ResenasProducto v-if="producto" :producto-id="producto._id" class="border-t border-neutral-200" />
     </main>
 
     <footer class="border-t border-neutral-200 bg-white text-neutral-400 text-xs py-6 text-center tracking-wide">

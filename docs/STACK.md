@@ -103,8 +103,10 @@ frontend/app/
 | Capa | Estado | Nota |
 |---|---|---|
 | PostgreSQL | Sin cambios de motor | Sigue siendo la fuente transaccional (usuarios, pedidos, checkout vía stored procedure). |
-| MongoDB | Sin cambios de motor | Sigue siendo el catálogo de productos + historial (event sourcing). |
-| Migraciones | Script custom (`database/migrations/migracion_postgres_a_mongo.py`) | No se introduce una herramienta de migraciones (Alembic, etc.) en esta fase; se evaluará si SQLAlchemy lo justifica más adelante. |
+| MongoDB | Sin cambios de motor | Sigue siendo el catálogo de productos + historial (event sourcing); Entrega 2 le agrega la colección `resenas`. |
+| Redis | ✅ Nuevo (Entrega 2) | Carrito de compra (`carrito:{id_usuario}`, TTL 30 min) y oferta de inventario limitado (`oferta:{producto_id}:stock`, decremento atómico vía script Lua). Ninguno de los dos es fuente de verdad del inventario real — ver limitación conocida en `README.md`. |
+| Neo4j | ✅ Nuevo (Entrega 2) | Grafo `(:Cuenta)-[:CALIFICO]->(:Producto)` para detección de fraude en reseñas. Ver `docs/decisiones/ADR-002-grafos-vs-columnar.md` para la justificación frente a la alternativa columnar (descartada por ahora). |
+| Migraciones | Script custom (`database/migrations/migracion_postgres_a_mongo.py`, `sembrar_resenas_fraude.py`) | No se introduce una herramienta de migraciones (Alembic, etc.) en esta fase; se evaluará si SQLAlchemy lo justifica más adelante. |
 
 ## Historial de decisiones
 
@@ -137,3 +139,99 @@ frontend/app/
   proyecto. Se actualiza el README raíz, este documento y
   `frontend/app/README.md` para reflejar el corte (ya no se documentan "dos
   frontends", solo Vue).
+- 2026-09-13: arranca la Entrega 2. El usuario decide, entre grafos y
+  columnar, implementar **Neo4j** para detección de fraude en reseñas
+  (aun sabiendo que implica construir el sistema de reseñas desde cero,
+  ya que no existía) y descartar Cassandra/columnar por ahora (ver
+  `docs/decisiones/ADR-002-grafos-vs-columnar.md`); infraestructura nueva
+  vía Docker Compose (`docker-compose.yml`, servicios `redis:7-alpine` y
+  `neo4j:5-community`).
+- 2026-09-13: se detecta que la base de datos Postgres local ya tenía
+  datos reales encima de la semilla original (cuenta admin propia, un
+  vendedor agregado a mano, el rol de un comprador semilla cambiado por
+  pruebas previas), lo que habría chocado con un script de semilla que
+  asumiera IDs fijos. Se corrige `database/postgres/datos_semilla_usuarios.sql`
+  para no fijar `id_usuario` (se deja que `SERIAL` los asigne) y usar
+  `ON CONFLICT (email) DO NOTHING`, de forma que sea seguro correrlo sobre
+  cualquier base sin importar su historial. Verificado aplicándolo contra
+  la base real: 10 compradores nuevos insertados sin colisión.
+- 2026-09-13: se completa el carrito de compra sobre Redis
+  (`backend/app/blueprints/carrito.py`): hash `carrito:{id_usuario}`,
+  TTL de 1800s renovado en cada operación (`EXPIRE`). `useCarrito.js` se
+  migra de `localStorage` a este backend conservando su interfaz pública
+  intacta (mutación optimista local + `apiFetch` en segundo plano); el
+  carrito ahora requiere sesión iniciada (ya no hay carrito anónimo).
+  Verificado con el servidor real: TTL confirmado con `redis-cli TTL`
+  refrescándose en cada operación, y con `HGETALL` confirmando el borrado
+  real tras un checkout exitoso.
+- 2026-09-13: se completa la oferta de inventario limitado sobre Redis
+  (`backend/app/lua/reservar_oferta.lua` + `backend/app/blueprints/ofertas.py`):
+  contador atómico `oferta:{producto_id}:stock`, reserva vía script Lua
+  (`EVAL`, check-and-decrement en una sola operación de servidor, sin
+  locks de aplicación ni `WATCH`/`MULTI`), independiente del `inventario`
+  de PostgreSQL. Se corrige `backend/main.py` para pasar `threaded=True`
+  a `app.run(...)` — sin eso el servidor de desarrollo de Flask serializa
+  requests y la prueba de concurrencia no sería válida. Evidencia real
+  (`backend/scripts/prueba_concurrencia_oferta.py`, 50 requests
+  concurrentes contra un límite de 10): 10 éxitos, 40 rechazos, stock
+  final en Redis = 0 — sin sobreventa.
+- 2026-09-13: se construye el sistema de reseñas desde cero
+  (`backend/app/blueprints/resenas.py`, colección Mongo `resenas`,
+  índice único `{producto_id, autor.id_usuario}`) y su sincronización
+  síncrona a Neo4j (`MERGE` sobre nodos `Cuenta`/`Producto` y relación
+  `CALIFICO`, en su propio try/except desacoplado del insert en Mongo —
+  mismo criterio de "sin 2PC" ya usado entre Postgres/Mongo). El cálculo
+  de `verificada_compra` hace join contra `pedidos`/`lineas_pedido` de
+  Postgres sin bloquear la creación de la reseña si no hay compra
+  registrada (deliberado: el patrón de fraude a detectar depende de que
+  se pueda calificar sin haber comprado). Verificado con el servidor real
+  contra Neo4j real: nodo/relación creados correctamente, sin duplicar
+  nodos entre reseñas del mismo producto.
+- 2026-09-13: se siembran datos de prueba con un patrón de fraude
+  detectable (`database/migrations/sembrar_resenas_fraude.py`, idempotente,
+  sin IDs fijos — consulta compradores/productos reales en cada corrida):
+  ruido legítimo (53 reseñas dispersas en 30 días), un anillo de fraude
+  fuerte (4 cuentas que se califican mutuamente sobre los mismos 4
+  productos de un mismo vendedor, calificación 5 fija, concentradas en
+  menos de 2 horas) y un anillo débil de control (2 cuentas, 2 productos
+  compartidos, que no debe marcarse como sospechoso). Durante la
+  verificación se confirmó que, con 11 cuentas y 18 productos, algunos
+  pares de cuentas no relacionadas coinciden por azar en 3+ productos
+  compartidos — un umbral ingenuo de "productos compartidos" por sí solo
+  generaría falsos positivos.
+- 2026-09-13: se implementa la detección de fraude
+  (`backend/app/blueprints/fraude.py`, `GET /api/fraude/alertas`) con una
+  consulta Cypher de 3 saltos que combina tres señales para evitar los
+  falsos positivos detectados en el paso anterior: productos compartidos
+  (≥3 por par), calificación uniforme de 5 estrellas en ambos lados del
+  par, y una ventana de tiempo corta entre ambas calificaciones (6h por
+  defecto). Verificado contra los datos reales sembrados: el anillo
+  fuerte aparece completo (los 4 tríos posibles de las 4 cuentas
+  involucradas), el anillo débil de control no aparece en ningún
+  resultado, y no se detectaron falsos positivos adicionales del ruido
+  aleatorio.
+- 2026-09-14: se completa la UI de la Entrega 2 en una sola pasada (para
+  evitar que dos agentes tocaran `VistaDetalleProducto.vue` a la vez):
+  `components/publico/OfertaLimitada.vue` (barra de progreso, reserva,
+  polling cada 3s, alta/cierre de oferta para vendedor/admin),
+  `components/publico/ResenasProducto.vue` (listado con badge de compra
+  verificada, formulario gateado a rol comprador), y
+  `components/admin/GestionFraude.vue` (tab nuevo, solo administrador,
+  con fila expandible con el JSON crudo de cada alerta). Verificado
+  reproduciendo las llamadas reales que hace cada componente contra el
+  backend (creación/reserva/cierre de oferta, alta de reseña duplicada,
+  alertas de fraude con y sin rol de administrador) y confirmando que
+  Vite transforma los módulos sin errores — sin acceso a un navegador
+  real en este entorno, pendiente una verificación visual manual.
+- 2026-09-14: pase de QA independiente sobre los 4 blueprints nuevos, la
+  regresión de checkout/catálogo/categorías/historial/auth, y la
+  interacción entre piezas nuevas (carrito + checkout, oferta + carrito
+  en paralelo, reseña reflejada en Mongo y Neo4j) — sin hallazgos de bugs.
+  Se detectó un hueco en los datos semilla (no un bug de código): de los
+  11 compradores, solo Sofia Lopez tenía una dirección de envío propia,
+  así que un checkout real con cualquier otro comprador nuevo fallaba con
+  "la dirección no pertenece al comprador". Se corrige agregando una
+  dirección principal por email a cada uno de los 10 compradores nuevos
+  en `datos_semilla_usuarios.sql` (mismo criterio de `ON CONFLICT`/lookup
+  dinámico, sin IDs fijos). Verificado contra la base real: los 11
+  compradores tienen dirección propia.
