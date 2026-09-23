@@ -69,6 +69,11 @@ function cerrarSesion() {
           to="/admin"
           class="px-4 py-1.5 border border-neutral-700 hover:border-neutral-500 text-white rounded-full text-xs font-medium transition"
         >Panel Admin →</RouterLink>
+        <button
+          v-if="sesion.rol === 'comprador'"
+          @click="emit('cambiar-vista', 'perfil')"
+          class="px-4 py-1.5 border border-neutral-700 hover:border-neutral-500 text-white rounded-full text-xs font-medium transition"
+        >Mi cuenta</button>
         <button @click="cerrarSesion" title="Cerrar sesión" class="w-8 h-8 flex items-center justify-center text-neutral-500 hover:text-white transition">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
         </button>

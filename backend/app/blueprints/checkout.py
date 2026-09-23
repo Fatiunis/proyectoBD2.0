@@ -8,7 +8,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 from .. import ofertas_redis
-from ..extensions import db, redis_client, ZONA_GUATEMALA
+from ..extensions import db, redis_client, col_productos, ZONA_GUATEMALA
+from ..models import Inventario
 from .carrito import _clave_carrito
 
 bp = Blueprint("checkout", __name__)
@@ -229,5 +230,30 @@ def procesar_checkout():
         redis_client.delete(clave)
     except Exception as e:
         print(f"[checkout] ADVERTENCIA: pedido {id_pedido} confirmado, pero no se pudo borrar {clave} en Redis: {e}")
+
+    # Espejo "mejor esfuerzo" del stock hacia Mongo: el pedido ya está confirmado en
+    # Postgres, esto es solo para que GET /api/productos/<id> no muestre un stock viejo.
+    # Se lee de Postgres (no se resta en memoria) porque entre el commit del SP y este
+    # bloque pueden haberse confirmado otros checkouts concurrentes sobre el mismo
+    # producto; una lectura fresca post-commit siempre refleja el valor real.
+    ids_comprados = [it["id_producto"] for it in items]
+    try:
+        filas_inventario = (
+            db.session.query(Inventario.id_producto, Inventario.stock_disponible)
+            .filter(Inventario.id_producto.in_(ids_comprados))
+            .all()
+        )
+        for id_producto, stock_actual in filas_inventario:
+            try:
+                col_productos.update_one(
+                    {"id_sql_origen": id_producto},
+                    {"$set": {"stock_disponible": stock_actual}},
+                )
+            except Exception as e:
+                print(f"[checkout] ADVERTENCIA: pedido {id_pedido} confirmado, pero no se pudo "
+                      f"sincronizar el stock Mongo del producto {id_producto}: {e}")
+    except Exception as e:
+        print(f"[checkout] ADVERTENCIA: pedido {id_pedido} confirmado, pero no se pudo leer el "
+              f"stock actualizado de Postgres para sincronizar Mongo: {e}")
 
     return jsonify({"mensaje": mensaje, "id_pedido": id_pedido, "referencia_pago": referencia_pago}), 201

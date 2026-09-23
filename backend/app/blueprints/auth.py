@@ -16,6 +16,7 @@ def _usuario_a_dict(usuario, incluir_fecha=True):
         "nombre": usuario.nombre,
         "email": usuario.email,
         "rol": usuario.rol,
+        "telefono": usuario.telefono,
     }
     if incluir_fecha:
         data["fecha_registro"] = usuario.fecha_registro.isoformat()
@@ -118,6 +119,38 @@ def actualizar_usuario(id_usuario):
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"Error en base de datos: {str(e)}"}), 500
+
+
+@bp.route("/api/usuarios/<int:id_usuario>/perfil", methods=["PUT"])
+def actualizar_perfil(id_usuario):
+    data = request.get_json(silent=True) or {}
+    usuario = db.session.get(Usuario, id_usuario)
+    if not usuario:
+        return jsonify({"error": "Usuario no encontrado"}), 404
+
+    if "nombre" in data:
+        nombre = (data.get("nombre") or "").strip()
+        if not nombre:
+            return jsonify({"error": "El nombre no puede quedar vacío"}), 400
+        usuario.nombre = nombre
+
+    if "telefono" in data:
+        usuario.telefono = (data.get("telefono") or "").strip() or None
+
+    if data.get("password_nueva"):
+        if not data.get("password_actual") or not check_password_hash(usuario.password_hash, data["password_actual"]):
+            return jsonify({"error": "La contraseña actual no es correcta"}), 400
+        if len(data["password_nueva"]) < 8:
+            return jsonify({"error": "La contraseña nueva debe tener al menos 8 caracteres"}), 400
+        usuario.password_hash = generate_password_hash(data["password_nueva"])
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Error en base de datos: {str(e)}"}), 500
+
+    return jsonify({"mensaje": "Perfil actualizado", "usuario": _usuario_a_dict(usuario)})
 
 
 @bp.route("/api/auth/login", methods=["POST"])
