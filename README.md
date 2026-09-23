@@ -24,6 +24,8 @@ Qué se construyó, en concreto:
 - **Oferta de inventario limitado** ("flash sale"): cupo independiente por producto en Redis, con una **duración** que se indica al crearla (la oferta vence sola al terminar esa ventana de tiempo), reservado con un script Lua atómico (sin sobreventa, verificado con 50 solicitudes concurrentes contra un límite de 10 → 10 éxitos, 0 sobreventa). Se crea y se cierra desde la página de detalle del producto; solo puede hacerlo el vendedor dueño del producto o un administrador.
 - **Reseñas de producto**: sistema nuevo desde cero — cualquier comprador puede calificar (1-5) y comentar un producto una sola vez, visible en `/producto/:id`. El formulario está al final de la página del producto; se llega directo con el enlace "★ Escribir reseña" bajo el precio, o con "Dejar reseña" desde el resumen de compra (URL `/producto/:id#escribir-resena`).
 - **Detección de fraude en reseñas**: cada reseña se sincroniza a un grafo en Neo4j; el panel admin (`/admin/fraude`, solo administrador) corre una consulta de varios saltos que señala cuentas que se recalifican entre sí sobre los mismos productos.
+- **Direcciones de envío en el checkout**: el checkout ya no pide escribir el ID de la dirección (antes había que adivinarlo y fallaba con "La dirección X no pertenece al comprador Y"). Ahora muestra un selector con las direcciones del comprador, con la principal ya elegida, y un mini formulario para agregar una si no tiene ninguna o quiere otra. Lo respalda un blueprint nuevo (`direcciones.py`: `GET`/`POST /api/usuarios/<id_usuario>/direcciones`); la primera dirección de un usuario queda como principal y marcar otra como principal desmarca la anterior.
+- **Imágenes en el formulario de producto del admin**: al crear o editar un producto se pueden agregar hasta 10 links de imagen (http/https), con vista previa, elección de portada y orden (↑/↓). Detalle en [Imágenes de los productos](#imágenes-de-los-productos).
 - **Documentación nueva**: [`docs/decisiones/ADR-002-grafos-vs-columnar.md`](docs/decisiones/ADR-002-grafos-vs-columnar.md) (por qué Neo4j y no Cassandra), [`docs/decisiones/ADR-003-redis-carrito-y-oferta.md`](docs/decisiones/ADR-003-redis-carrito-y-oferta.md) (por qué Redis para el carrito y la oferta), [`docs/arquitectura.md`](docs/arquitectura.md) (diagrama actualizado) y [`docs/informe-entrega-2.md`](docs/informe-entrega-2.md) (informe de la entrega).
 
 ## Estado del proyecto
@@ -118,6 +120,14 @@ Carga los 11 productos adicionales de la semilla (15 en total):
 psql -U postgres -d tiendaya_db -f database/postgres/datos_semilla_productos.sql
 ```
 
+Carga la **semilla masiva**: 40 tiendas nuevas (usuarios `vendedor`), 3 categorías padre y 19 subcategorías nuevas (cada una con su `esquema_atributos`), y 1000 productos con inventario inicial repartidos entre esas tiendas y las 2 tiendas semilla, cada tienda según su giro (una tienda de tecnología no vende playeras):
+
+```bash
+psql -U postgres -d tiendaya_db -f database/postgres/datos_semilla_masivos.sql
+```
+
+Puedes correrlo aunque tu base ya tenga datos propios, y más de una vez: busca categorías, tiendas y productos por nombre/email/SKU (nunca por ID fijo), no duplica nada y no gasta IDs de las secuencias al repetirse. Tampoco modifica las categorías, usuarios ni productos que ya existían.
+
 Si no tienes el cliente `psql` instalado, puedes correr cualquiera de los `.sql` con este atajo en Python (usa las credenciales de tu `.env`):
 
 ```bash
@@ -136,14 +146,37 @@ python database/migrations/migracion_postgres_a_mongo.py
 
 Esto crea `productos` y `historial_cambios_productos` en Mongo, con los eventos iniciales de creación, fotos reales por producto (Unsplash, mapeadas por SKU en el propio script) y los índices (`idx_categoria_activo_precio`, `idx_sku_unico`, `idx_historial_producto_fecha`, `idx_texto_busqueda`). **Si ya tenías el catálogo migrado de antes, vuelve a correr este script** para que tu Mongo local quede igual al del resto del equipo.
 
+**Modo incremental (recomendado para cargar la semilla masiva en una base en uso):**
+
+```bash
+python database/migrations/migracion_postgres_a_mongo.py --incremental
+```
+
+No borra nada: solo inserta en Mongo los productos de Postgres que todavía no tienen documento (por `id_sql_origen` o `sku`), cada uno con su evento `CREACION_PRODUCTO` en el historial. Los documentos que ya existían, sus ediciones desde el admin y sus eventos no se tocan. Puedes correrlo varias veces sin duplicar nada. La migración completa (sin `--incremental`) también incluye los 1000 productos, pero borra todo lo demás, igual que antes.
+
+#### Semilla masiva: atributos, atributos personalizados e imágenes
+
+Los atributos y las fotos de los 1000 productos no se guardan en Postgres (Postgres no tiene columna de atributos). Vienen de `database/migrations/datos_semilla_masivos_catalogo.json`, organizado por SKU, y la migración lo lee igual que lee `ATRIBUTOS_POR_SKU` / `IMAGENES_POR_SKU`:
+
+- **Atributos:** cada producto trae exactamente las claves del `esquema_atributos` de su subcategoría, con el tipo correcto (`numero` → número, `texto` → texto) y valores variados, para que `/api/categorias/<id>/filtros` genere filtros útiles.
+- **Atributos personalizados:** el 20% de los productos (200) lleva además 1 o 2 claves de texto que no están en el esquema de su categoría. Es el mismo mecanismo que usa el formulario de producto del admin (por ejemplo `edicion_limitada: "Si"`, `grabado_personalizado: "Grabado en la caja (Q80)"`, `bordado_personalizado`, `cambio_de_talla`, `incluye_lapiz`...). El formulario de edición los muestra en "Atributos personalizados".
+- **Imágenes:** cada producto tiene de 1 a 3 fotos de Unsplash (295 con 1, 413 con 2 y 292 con 3). La primera es la portada (`es_portada: true`, `orden` de 1 a n). Las fotos se toman de un conjunto por subcategoría: 142 fotos en total, todas revisadas (responden HTTP 200 y muestran el tipo de producto correcto). En electrodomésticos, utensilios y audífonos la portada coincide con el tipo concreto (por ejemplo, una licuadora lleva foto de licuadora). La marca que aparece en la foto no siempre coincide con la del producto.
+
+El `.sql` y el `.json` los genera `database/migrations/generar_semilla_masiva.py`. El script es determinístico (usa una semilla fija), así que siempre produce los mismos archivos. **Si necesitas cambiar la semilla, edita el generador y vuelve a correrlo; no edites a mano el `.sql` ni el `.json`:**
+
+```bash
+python database/migrations/generar_semilla_masiva.py
+```
+
 #### Imágenes de los productos
 
-Las imágenes no son archivos del repositorio: cada producto guarda en Mongo dos enlaces a fotos de Unsplash (portada y detalle). **La fuente compartida por todo el equipo es el mapa `IMAGENES_POR_SKU` de `database/migrations/migracion_postgres_a_mongo.py`**: al correr la migración, todos obtienen las mismas imágenes.
+Las imágenes no son archivos del repositorio: cada producto guarda en Mongo una lista de enlaces a fotos (`imagenes: [{id_imagen, url, es_portada, orden}]`, con una sola portada). Cuántas tiene depende de su origen: 2 (portada y detalle) en los 15 productos originales, de 1 a 3 en la semilla masiva y hasta 10 en los productos cargados desde el panel admin. **La fuente compartida por todo el equipo es el mapa `IMAGENES_POR_SKU` de `database/migrations/migracion_postgres_a_mongo.py`** (más `datos_semilla_masivos_catalogo.json` para la semilla masiva): al correr la migración, todos obtienen las mismas imágenes.
 
-- **Para cambiar o agregar la imagen de un producto**, edita `IMAGENES_POR_SKU` (`"SKU": ("photo-<id portada>", "photo-<id detalle>")`, con el id que aparece en la URL de Unsplash), vuelve a correr la migración y haz commit del script. Un cambio hecho solo en tu Mongo local no les llega a los demás.
+- **Para cambiar o agregar la imagen de un producto de la semilla**, edita `IMAGENES_POR_SKU` (`"SKU": ("photo-<id portada>", "photo-<id detalle>")`, con el id que aparece en la URL de Unsplash), vuelve a correr la migración y haz commit del script. Un cambio hecho solo en tu Mongo local no les llega a los demás. (Para la semilla masiva, edita el generador, ver arriba).
 - **Un producto nuevo de la semilla** necesita su entrada en el mapa; si no la tiene, recibe una foto genérica de su categoría (`IMAGEN_GENERICA_POR_CATEGORIA`).
-- **Los productos creados desde el panel admin** no llevan imágenes (el formulario no permite cargarlas); el sitio muestra el ícono de su categoría.
-- Ojo: la migración **borra y recrea** `productos` e `historial_cambios_productos`, así que se pierden las ediciones hechas desde el admin y el historial local.
+- **Desde el panel admin**, el formulario de producto (crear o editar) tiene la sección "Imágenes del producto": hasta 10 links `http://` o `https://`, cada uno con miniatura de vista previa, un radio para marcar la portada y botones ↑/↓ para reordenar. `POST /api/productos` valida y normaliza la lista antes de escribir en Postgres o Mongo: acepta strings u objetos `{url, es_portada}`, quita las URL duplicadas, deja una sola portada (la marcada o, si no hay, la primera) y responde 400 si alguna URL es inválida o hay más de 10. Al editar, si el payload no trae `imagenes` se conservan las que había y si trae `[]` se vacían; el formulario siempre envía la lista completa. Un producto sin imágenes muestra el ícono de su categoría.
+- **Las imágenes cargadas desde el panel viven solo en Mongo** (no están en `IMAGENES_POR_SKU` ni en Postgres), así que no les llegan a los demás por `git pull`.
+- Ojo: la migración completa (sin `--incremental`) **borra y recrea** `productos` e `historial_cambios_productos`, así que se pierden las ediciones hechas desde el admin (incluidas las imágenes cargadas desde el panel: el producto se vuelve a crear desde Postgres con la foto genérica de su categoría o sin imagen) y el historial local. El modo `--incremental` no toca los documentos que ya existen, así que las conserva.
 
 ### 5. Levantar Redis y Neo4j, y sembrar los datos de la Entrega 2
 
@@ -211,6 +244,51 @@ El registro público (`/`) solo crea cuentas de `comprador`. Para crear cuentas 
 
 Tras correr `database/postgres/datos_semilla_usuarios.sql` (paso 5) hay **10 compradores adicionales**, cada uno con su propia dirección de envío (misma contraseña `Tiendaya123!`), por ejemplo `maria.torres@email.com` — necesarios para checkout de prueba y para que la detección de fraude tenga variedad de cuentas.
 
+Tras correr `database/postgres/datos_semilla_masivos.sql` (paso 3) hay **40 tiendas adicionales** con rol `vendedor` (misma contraseña `Tiendaya123!`). Cada una entra a `/admin` y ve solo su catálogo. De los 1000 productos nuevos, TechStore Oficial recibe 79 y Moda Urbana GT 47; el resto se reparte así:
+
+| Tienda | Email | Giro (subcategorías) | Productos |
+|---|---|---|---|
+| Compu Centro Zona 4 | ventas@compucentrozona4.com.gt | Laptops, Monitores, Teclados, Mouse | 28 |
+| Megatech Guatemala | tienda@megatechgt.com | Laptops, Monitores, Tablets | 26 |
+| Cel Express Guatemala | ventas@celexpress.com.gt | Celulares, Smartwatches, Audífonos | 31 |
+| Gamer Zone Xela | contacto@gamerzonexela.com | Monitores, Teclados, Mouse, Audífonos, Laptops | 32 |
+| iMundo Oakland | hola@imundooakland.com.gt | Laptops, Tablets, Smartwatches, Celulares, Audífonos | 49 |
+| Digital Plaza Miraflores | ventas@digitalplazagt.com | Celulares, Tablets, Audífonos | 32 |
+| SonidoPro GT | info@sonidoprogt.com | Audífonos | 8 |
+| Periféricos Chapines | pedidos@perifericoschapines.com | Teclados, Mouse | 9 |
+| Tecno Antigua | ventas@tecnoantigua.com.gt | Celulares, Smartwatches, Tablets | 30 |
+| Byte Store Mixco | contacto@bytestoremixco.com | Laptops, Monitores, Mouse, Teclados | 19 |
+| Smart Life Guatemala | ventas@smartlifegt.com | Smartwatches, Audífonos, Celulares | 29 |
+| Kompuservicios Quetzal | ventas@kompuquetzal.com.gt | Laptops, Monitores | 8 |
+| Denim Chapín | ventas@denimchapin.com | Jeans, Playeras | 26 |
+| Sneaker Hub Guatemala | hola@sneakerhubgt.com | Tenis, Gorras | 25 |
+| Boutique Doña Lupita | boutique@donalupita.com.gt | Vestidos | 13 |
+| Urban Xela Streetwear | contacto@urbanxela.com | Sudaderas, Playeras, Gorras | 27 |
+| Estilo Antigüeño | ventas@estiloantigueno.com | Vestidos, Playeras | 19 |
+| Pasos Firmes Calzado | ventas@pasosfirmes.com.gt | Tenis | 28 |
+| La Gorra Chapina | pedidos@lagorrachapina.com | Gorras | 9 |
+| Moda Maya Contemporánea | tienda@modamayacontemporanea.com | Vestidos, Playeras | 23 |
+| Street Kings GT | ventas@streetkingsgt.com | Sudaderas, Tenis, Gorras, Playeras | 34 |
+| Jeans & Co. Pradera | ventas@jeansypradera.com.gt | Jeans | 14 |
+| Casual Market Cayalá | hola@casualmarketcayala.com | Playeras, Jeans, Sudaderas | 30 |
+| Cocina Feliz GT | ventas@cocinafelizgt.com | Electrodomésticos de Cocina, Utensilios de Cocina | 19 |
+| Hogar Práctico Quetzaltenango | contacto@hogarpracticoxela.com | Electrodomésticos de Cocina, Utensilios de Cocina | 33 |
+| Casa Barista Guatemala | tienda@casabaristagt.com | Electrodomésticos de Cocina | 12 |
+| El Rincón del Chef | ventas@rincondelchef.com.gt | Utensilios de Cocina | 18 |
+| Electrohogar Petapa | ventas@electrohogarpetapa.com | Electrodomésticos de Cocina | 13 |
+| Ciclo Guate | ventas@cicloguate.com | Bicicletas, Mochilas | 27 |
+| Pedal Libre Antigua | hola@pedallibreantigua.com | Bicicletas | 10 |
+| Fitness Store GT | ventas@fitnessstoregt.com | Pesas y Mancuernas, Tapetes de Yoga | 36 |
+| Yoga Atitlán | namaste@yogaatitlan.com | Tapetes de Yoga | 11 |
+| Aventura Outdoor Guatemala | ventas@aventuraoutdoorgt.com | Mochilas, Bicicletas | 22 |
+| Power Gym Supply | pedidos@powergymsupply.com.gt | Pesas y Mancuernas | 18 |
+| Mochilas Volcán | ventas@mochilasvolcan.com | Mochilas | 16 |
+| Aromas de Guatemala | ventas@aromasdeguatemala.com | Perfumes | 8 |
+| Dermacuidado GT | contacto@dermacuidadogt.com | Cuidado de la Piel | 8 |
+| Belleza Natural Cobán | ventas@bellezanaturalcoban.com | Cuidado de la Piel, Perfumes | 34 |
+| Perfumería Esencia Zona 14 | ventas@perfumeriaesencia.com.gt | Perfumes | 11 |
+| Glow Beauty Store | hola@glowbeautygt.com | Cuidado de la Piel, Perfumes | 29 |
+
 ## Estructura del repositorio
 
 ```
@@ -220,11 +298,12 @@ backend/
     __init__.py                 create_app(): Flask + CORS + registro de blueprints
     config.py                    load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, NEO4J_URI...
     extensions.py                 db (SQLAlchemy), Mongo (col_productos, col_historial, col_resenas), redis_client, neo4j_driver
-    models.py                      Modelos SQLAlchemy: Usuario, Categoria, Producto, Inventario, Pedido, LineaPedido
+    models.py                      Modelos SQLAlchemy: Usuario, Direccion, Categoria, Producto, Inventario, Pedido, LineaPedido
     lua/
       reservar_oferta.lua           Check-and-decrement atómico para la oferta de inventario limitado
     blueprints/
       auth.py                       /api/auth/register, /api/auth/login, /api/usuarios, /api/usuarios/<id>
+      direcciones.py                 /api/usuarios/<id_usuario>/direcciones (GET lista, POST alta; las usa el checkout)
       checkout.py                    /api/checkout
       catalogo.py                     /api/categorias, /api/categorias/<id>/filtros, /api/productos, /api/productos/<id>
       historial.py                     /api/historial, /api/historial/<producto_id>
@@ -240,13 +319,16 @@ database/
     ddl_tiendaya.sql               Esquema 3FN + semilla + sp_procesar_checkout
     datos_semilla_productos.sql    11 productos adicionales (15 en total)
     datos_semilla_usuarios.sql     10 compradores + direcciones adicionales (Entrega 2, IDs dinámicos vía ON CONFLICT)
+    datos_semilla_masivos.sql      Semilla masiva: 19 subcategorías + 40 tiendas + 1000 productos e inventario (generado, idempotente)
   mongo/
     01_indexes.js                  Índices de referencia (ya se crean también desde la migración)
     02_aggregation_queries.js      Consultas de agregación de referencia
   neo4j/
     01_constraints.cypher          Constraints de unicidad para nodos Cuenta/Producto (Entrega 2)
   migrations/
-    migracion_postgres_a_mongo.py  ETL: aplana productos de Postgres a documentos Mongo + fotos reales por SKU
+    migracion_postgres_a_mongo.py  ETL: aplana productos de Postgres a documentos Mongo + fotos reales por SKU (--incremental: sin borrar)
+    generar_semilla_masiva.py       Genera datos_semilla_masivos.sql + datos_semilla_masivos_catalogo.json (determinístico)
+    datos_semilla_masivos_catalogo.json  Atributos (incl. personalizados) y 1-3 fotos Unsplash por SKU de la semilla masiva
     sembrar_resenas_fraude.py       Siembra reseñas con un patrón de fraude detectable (Entrega 2, idempotente)
 frontend/
   app/                        Sitio Vue 3 + Vite (único frontend, ver docs/STACK.md)
