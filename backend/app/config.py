@@ -5,13 +5,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configuración de conexiones
+# Configuración de conexiones. Cada integrante ajusta sus valores locales en ".env"
+# (ver .env.example); los defaults de aquí solo aplican si una variable no está definida.
 PG_CONFIG = {
     "host": os.getenv("PG_HOST", "localhost"),
-    "port": int(os.getenv("PG_PORT", "5432")), #Este es el puerto que tiene que cambiar marcos al 5433
+    "port": int(os.getenv("PG_PORT", "5432")),
     "dbname": os.getenv("PG_DBNAME", "tiendaya_db"),
     "user": os.getenv("PG_USER", "postgres"),
-    "password": os.getenv("PG_PASSWORD", "root") #Esta es la constraseña que tienen que cambiar
+    "password": os.getenv("PG_PASSWORD", "root")
 }
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")

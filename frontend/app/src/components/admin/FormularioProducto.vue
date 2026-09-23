@@ -23,6 +23,7 @@ const precio = ref("");
 const stock = ref("");
 const categoriaId = ref(null);
 const atributosValores = ref({});
+const atributosPersonalizados = ref([{ clave: "", valor: "" }]);
 
 const categoriaActual = computed(() => categorias.value.find((c) => c.id_categoria === categoriaId.value) || null);
 const esquemaAtributos = computed(() => categoriaActual.value?.esquema_atributos || []);
@@ -33,6 +34,14 @@ function inicializarAtributos(existentes = {}) {
     nuevo[attr.clave] = existentes[attr.clave] ?? "";
   });
   atributosValores.value = nuevo;
+}
+
+function agregarFilaPersonalizada() {
+  atributosPersonalizados.value.push({ clave: "", valor: "" });
+}
+
+function quitarFilaPersonalizada(index) {
+  atributosPersonalizados.value.splice(index, 1);
 }
 
 function onCambiarCategoria() {
@@ -48,6 +57,12 @@ if (props.productoParaEditar) {
   stock.value = p.stock_disponible ?? 0;
   categoriaId.value = p.categoria.id_categoria;
   inicializarAtributos(p.atributos || {});
+
+  const clavesEsquema = new Set(esquemaAtributos.value.map((attr) => attr.clave));
+  const extras = Object.entries(p.atributos || {})
+    .filter(([clave]) => !clavesEsquema.has(clave))
+    .map(([clave, valor]) => ({ clave, valor: String(valor) }));
+  atributosPersonalizados.value = extras.length > 0 ? extras : [{ clave: "", valor: "" }];
 } else {
   categoriaId.value = categorias.value[0]?.id_categoria ?? null;
   inicializarAtributos({});
@@ -63,7 +78,23 @@ async function guardarProducto() {
   const atributos = {};
   esquemaAtributos.value.forEach((attr) => {
     const valor = atributosValores.value[attr.clave];
-    atributos[attr.clave] = attr.tipo === "numero" ? parseFloat(valor) : valor;
+    if (attr.tipo === "numero") {
+      const numero = parseFloat(valor);
+      if (!Number.isNaN(numero)) atributos[attr.clave] = numero;
+    } else if (valor !== "" && valor !== null && valor !== undefined) {
+      atributos[attr.clave] = valor;
+    }
+  });
+
+  atributosPersonalizados.value.forEach((fila) => {
+    const clave = fila.clave.trim();
+    const valor = fila.valor.trim();
+    if (!clave || !valor) return;
+    if (clave in atributos) {
+      toast(`"${clave}" ya es un atributo de la categoría, se ignoró el atributo personalizado con esa clave.`, "error");
+      return;
+    }
+    atributos[clave] = valor;
   });
 
   const payload = {
@@ -151,6 +182,26 @@ async function guardarProducto() {
             >
           </div>
         </div>
+      </div>
+
+      <div class="p-4 bg-neutral-50 border border-neutral-200 rounded-xl">
+        <div class="flex justify-between items-center mb-3">
+          <h4 class="text-xs font-semibold uppercase tracking-wide text-neutral-400">Atributos adicionales de este producto</h4>
+          <button type="button" @click="agregarFilaPersonalizada" class="text-xs font-semibold text-accent-700 hover:underline">+ Agregar atributo</button>
+        </div>
+        <div class="grid grid-cols-[1fr_1fr_28px] gap-2 mb-2">
+          <span class="text-[10px] font-bold uppercase text-neutral-400">Clave</span>
+          <span class="text-[10px] font-bold uppercase text-neutral-400">Valor</span>
+          <span></span>
+        </div>
+        <div class="space-y-2">
+          <div v-for="(fila, index) in atributosPersonalizados" :key="index" class="grid grid-cols-[1fr_1fr_28px] gap-2 items-center">
+            <input type="text" v-model="fila.clave" placeholder="ej. tipo_bisagra" class="min-w-0 border border-neutral-300 p-1.5 rounded-lg bg-white text-xs font-mono focus:ring-2 focus:ring-accent-600 focus:border-accent-600 outline-none transition">
+            <input type="text" v-model="fila.valor" class="min-w-0 border border-neutral-300 p-1.5 rounded-lg bg-white text-xs focus:ring-2 focus:ring-accent-600 focus:border-accent-600 outline-none transition">
+            <button type="button" @click="quitarFilaPersonalizada(index)" class="text-neutral-400 hover:text-red-600 text-sm font-bold transition" title="Quitar atributo">✕</button>
+          </div>
+        </div>
+        <p class="text-[11px] text-neutral-400 mt-2">La "clave" se usa como nombre del campo en la base documental (sin espacios ni acentos, ej. <code>talla_zapato</code>).</p>
       </div>
 
       <button type="submit" class="w-full py-3 mt-2 bg-neutral-950 hover:bg-neutral-800 text-white font-semibold rounded-full text-sm transition">Guardar en base documental</button>

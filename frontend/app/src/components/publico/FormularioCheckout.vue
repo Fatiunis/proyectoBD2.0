@@ -7,13 +7,12 @@ import { useCarrito } from "../../composables/useCarrito";
 
 const { sesion } = useSesion();
 const { toast } = useToast();
-const { items, vaciar } = useCarrito();
+const { items, cargarCarrito, limpiarLocal } = useCarrito();
 
-const emit = defineEmits(["completado"]);
+const emit = defineEmits(["confirmado"]);
 
 const idDireccion = ref("");
 const metodoPago = ref("tarjeta_credito");
-const referenciaPago = ref("");
 const enviando = ref(false);
 
 async function confirmarCompra() {
@@ -22,8 +21,6 @@ async function confirmarCompra() {
     id_comprador: sesion.value.id_usuario,
     id_direccion: Number(idDireccion.value),
     metodo_pago: metodoPago.value,
-    referencia_pago: referenciaPago.value,
-    items: items.value.map((i) => ({ id_producto: i.idSqlOrigen, cantidad: i.cantidad })),
   };
 
   const { ok, data } = await apiFetch("/checkout", {
@@ -33,11 +30,17 @@ async function confirmarCompra() {
   enviando.value = false;
 
   if (ok) {
-    toast(data.mensaje, "success");
-    vaciar();
-    emit("completado");
+    toast(`Compra confirmada · Pedido #${data.id_pedido} · Referencia ${data.referencia_pago}`, "success");
+    const productos = items.value.map(({ idProducto, nombre, imagenUrl, cantidad, idCategoria }) => ({
+      idProducto, nombre, imagenUrl, cantidad, idCategoria,
+    }));
+    limpiarLocal();
+    emit("confirmado", { idPedido: data.id_pedido, referencia: data.referencia_pago, productos });
+  } else if (data?.codigo === "CARRITO_VACIO") {
+    toast(data.error, "error");
+    await cargarCarrito();
   } else {
-    toast(data.error || "No se pudo completar la compra.", "error");
+    toast(data?.error || "No se pudo completar la compra.", "error");
   }
 }
 </script>
@@ -65,10 +68,6 @@ async function confirmarCompra() {
           <option value="transferencia">Transferencia</option>
           <option value="paypal">PayPal</option>
         </select>
-      </div>
-      <div>
-        <label class="block text-xs font-semibold uppercase tracking-wide text-neutral-400 mb-1.5">Referencia de pago</label>
-        <input type="text" v-model="referenciaPago" required placeholder="Ej: número de autorización" class="w-full border-0 border-b border-neutral-300 py-2 text-sm focus:ring-0 focus:border-accent outline-none transition bg-transparent">
       </div>
       <button type="submit" :disabled="enviando" class="w-full py-3 mt-2 bg-neutral-950 hover:bg-neutral-800 disabled:opacity-50 text-white font-semibold rounded-full text-sm transition">
         {{ enviando ? "Procesando..." : "Confirmar compra" }}

@@ -126,9 +126,13 @@ async function vaciar() {
   if (!ok) avisarError(data);
 }
 
+function limpiarLocal() {
+  items.value = [];
+}
+
 const cantidadTotal = computed(() => items.value.reduce((acc, i) => acc + i.cantidad, 0));
 const totalPagar = computed(() => items.value.reduce((acc, i) => acc + i.cantidad * i.precioBase, 0));
 
 export function useCarrito() {
-  return { items, agregar, actualizarCantidad, quitar, vaciar, cantidadTotal, totalPagar };
+  return { items, cargarCarrito, agregar, actualizarCantidad, quitar, vaciar, limpiarLocal, cantidadTotal, totalPagar };
 }

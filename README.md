@@ -20,11 +20,11 @@ Si ya tenías TiendaYa corriendo de una entrega anterior, esto es lo que se agre
 5. Sigue los pasos **5 en adelante** de la sección de Instalación (levantar Redis/Neo4j, aplicar constraints, sembrar compradores y reseñas de prueba) — son pasos nuevos que no existían antes.
 
 Qué se construyó, en concreto:
-- **Carrito de compra**: ya no vive en `localStorage`, vive en Redis (`carrito:{id_usuario}`, expira a los 30 min de inactividad). Requiere sesión iniciada.
-- **Oferta de inventario limitado** ("flash sale"): cupo independiente por producto en Redis, reservado con un script Lua atómico (sin sobreventa, verificado con 50 solicitudes concurrentes contra un límite de 10 → 10 éxitos, 0 sobreventa). Se crea/gestiona desde la página de detalle del producto (solo vendedor/admin).
-- **Reseñas de producto**: sistema nuevo desde cero — cualquier comprador puede calificar (1-5) y comentar un producto una sola vez, visible en `/producto/:id`.
+- **Carrito de compra**: ya no vive en `localStorage`, vive en Redis (`carrito:{id_usuario}`, expira a los 30 min de inactividad). Requiere sesión iniciada. El checkout toma los productos de ese carrito en Redis (no de lo que envía el navegador), así que un carrito expirado ya no se puede pagar. La referencia de pago la genera el backend automáticamente (formato `TY-AAAAMMDDHHMMSS-XXXXXX`). Al confirmar la compra se muestra un resumen con el número de pedido, la referencia y un botón "Dejar reseña" por cada producto comprado.
+- **Oferta de inventario limitado** ("flash sale"): cupo independiente por producto en Redis, con una **duración** que se indica al crearla (la oferta vence sola al terminar esa ventana de tiempo), reservado con un script Lua atómico (sin sobreventa, verificado con 50 solicitudes concurrentes contra un límite de 10 → 10 éxitos, 0 sobreventa). Se crea y se cierra desde la página de detalle del producto; solo puede hacerlo el vendedor dueño del producto o un administrador.
+- **Reseñas de producto**: sistema nuevo desde cero — cualquier comprador puede calificar (1-5) y comentar un producto una sola vez, visible en `/producto/:id`. El formulario está al final de la página del producto; se llega directo con el enlace "★ Escribir reseña" bajo el precio, o con "Dejar reseña" desde el resumen de compra (URL `/producto/:id#escribir-resena`).
 - **Detección de fraude en reseñas**: cada reseña se sincroniza a un grafo en Neo4j; el panel admin (`/admin/fraude`, solo administrador) corre una consulta de varios saltos que señala cuentas que se recalifican entre sí sobre los mismos productos.
-- **Documentación nueva**: [`docs/decisiones/ADR-002-grafos-vs-columnar.md`](docs/decisiones/ADR-002-grafos-vs-columnar.md) (por qué Neo4j y no Cassandra) y [`docs/arquitectura.md`](docs/arquitectura.md) (diagrama actualizado).
+- **Documentación nueva**: [`docs/decisiones/ADR-002-grafos-vs-columnar.md`](docs/decisiones/ADR-002-grafos-vs-columnar.md) (por qué Neo4j y no Cassandra), [`docs/decisiones/ADR-003-redis-carrito-y-oferta.md`](docs/decisiones/ADR-003-redis-carrito-y-oferta.md) (por qué Redis para el carrito y la oferta), [`docs/arquitectura.md`](docs/arquitectura.md) (diagrama actualizado) y [`docs/informe-entrega-2.md`](docs/informe-entrega-2.md) (informe de la entrega).
 
 ## Estado del proyecto
 
@@ -36,12 +36,15 @@ Qué se construyó, en concreto:
 
 **Entrega 2** — completa: carrito y oferta de inventario limitado sobre Redis, sistema de reseñas y detección de fraude sobre Neo4j (ver sección de arriba). Bitácora completa de qué se hizo, por qué, y qué se verificó en [`docs/STACK.md`](docs/STACK.md).
 
-**Pendiente (documentación, no código):** diagrama entidad-relación, registro de decisión de embeber/referenciar (reseñas, imágenes, vendedor) de la Entrega 1, informe formal de Entrega 1.
+**Informe de la Entrega 1:** [`docs/Entrega 1 Base de Datos 2 (1).pdf`](<docs/Entrega 1 Base de Datos 2 (1).pdf>) (diagrama entidad-relación, justificación de la normalización y decisiones de embeber/referenciar).
+
+**Pendiente (documentación, no código):** explicar cómo `lineas_pedido` (PostgreSQL) referencia productos que ahora viven en MongoDB (vía el campo `id_sql_origen`).
 
 **Limitaciones conocidas:**
 - El checkout opera sobre `productos`/`inventario` de PostgreSQL, no sobre MongoDB — editar un producto desde el admin solo se refleja en Mongo, el checkout sigue usando precio/stock de Postgres. Los dos catálogos no se sincronizan automáticamente.
 - La oferta de inventario limitado vive enteramente en Redis, independiente del inventario real de Postgres — es un cupo aparte para la mecánica de flash sale, no descuenta stock del catálogo.
 - La sincronización de una reseña hacia Neo4j es de mejor esfuerzo (sin 2PC): si Neo4j no está disponible al crear la reseña, esta igual queda guardada en Mongo y solo se registra una advertencia en el log del backend.
+- El historial de cambios del producto no registra el stock: cada evento guarda nombre, descripción, precio, estado activo/inactivo y atributos. La reconstrucción por fecha indica si el producto estaba disponible para la venta (activo), pero no cuántas unidades había en existencia en ese momento.
 
 ## Requisitos previos
 
@@ -109,7 +112,7 @@ Carga el esquema, el procedimiento de checkout y los primeros 4 productos:
 psql -U postgres -d tiendaya_db -f database/postgres/ddl_tiendaya.sql
 ```
 
-Carga los 5 productos adicionales de la semilla:
+Carga los 11 productos adicionales de la semilla (15 en total):
 
 ```bash
 psql -U postgres -d tiendaya_db -f database/postgres/datos_semilla_productos.sql
@@ -125,7 +128,7 @@ python -c "import psycopg2, os; from dotenv import load_dotenv; load_dotenv(); c
 
 ### 4. Migrar el catálogo a MongoDB
 
-Con PostgreSQL ya poblado (los 9 productos), corre la migración — es idempotente: si la vuelves a correr, **recrea las colecciones desde cero** (`drop()` + reinserción), así que es seguro correrla de nuevo cada vez que haces `pull` de una rama que la haya tocado.
+Con PostgreSQL ya poblado (los 15 productos), corre la migración — es idempotente: si la vuelves a correr, **recrea las colecciones desde cero** (`drop()` + reinserción), así que es seguro correrla de nuevo cada vez que haces `pull` de una rama que la haya tocado.
 
 ```bash
 python database/migrations/migracion_postgres_a_mongo.py
@@ -181,6 +184,8 @@ Vite queda escuchando en `http://localhost:5173` (o el siguiente puerto libre si
 
 Para un build de producción: `npm run build` (genera `frontend/app/dist/`).
 
+**Si el repositorio está dentro de OneDrive** (o en otra carpeta sincronizada): `vite.config.js` usa `server.watch.usePolling`, porque OneDrive no siempre avisa de los cambios en los archivos y Vite podía seguir sirviendo versiones viejas de algunos módulos (por ejemplo, un carrito que no se vaciaba al comprar). Si igual ves un comportamiento que no coincide con el código, detén Vite, vuelve a correr `npm run dev` y recarga el navegador con **Ctrl+F5**.
+
 ## Credenciales de prueba
 
 Todos los usuarios semilla usan la misma contraseña: **`Tiendaya123!`**
@@ -224,7 +229,7 @@ backend/
 database/
   postgres/
     ddl_tiendaya.sql               Esquema 3FN + semilla + sp_procesar_checkout
-    datos_semilla_productos.sql    5 productos adicionales
+    datos_semilla_productos.sql    11 productos adicionales (15 en total)
     datos_semilla_usuarios.sql     10 compradores + direcciones adicionales (Entrega 2, IDs dinámicos vía ON CONFLICT)
   mongo/
     01_indexes.js                  Índices de referencia (ya se crean también desde la migración)
@@ -238,7 +243,7 @@ frontend/
   app/                        Sitio Vue 3 + Vite (único frontend, ver docs/STACK.md)
     src/
       views/                       VistaPublica.vue, VistaDetalleProducto.vue, VistaAdmin.vue
-      components/publico/           Catálogo, filtros, detalle, carrito, checkout, login/registro, reseñas, oferta límite
+      components/publico/           Catálogo, filtros, tarjeta de producto, carrito, checkout, login/registro, reseñas, oferta límite
       components/admin/              Catálogo, categorías, usuarios, ventas, historial, fraude (GestionFraude.vue)
       composables/                    useSesion, useToast, useCategorias, useCarrito (Redis-backed, Entrega 2)
       services/api.js                 apiFetch (wrapper de fetch contra el backend)
@@ -247,6 +252,8 @@ docs/
   arquitectura.md            Diagrama de arquitectura actualizado (Entrega 2)
   decisiones/
     ADR-002-grafos-vs-columnar.md   Registro de decisión: Neo4j para fraude en reseñas, columnar descartado por ahora
+    ADR-003-redis-carrito-y-oferta.md  Registro de decisión: Redis para el carrito y la oferta de inventario limitado
+  informe-entrega-2.md       Informe de la Entrega 2 (decisiones, evidencia y responsabilidades)
 docker-compose.yml          Redis + Neo4j (Entrega 2)
 requirements.txt
 .env.example

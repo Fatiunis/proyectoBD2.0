@@ -68,7 +68,7 @@ async function enviarResena() {
 </script>
 
 <template>
-  <section class="pt-6 pb-16">
+  <section id="resenas" class="pt-6 pb-16 scroll-mt-20">
     <p class="text-xs uppercase tracking-[0.2em] text-neutral-400">Opiniones</p>
     <h2 class="text-3xl font-extrabold tracking-tighter text-neutral-950 mt-1 mb-6">Reseñas de este producto</h2>
 
@@ -92,7 +92,7 @@ async function enviarResena() {
         </div>
       </div>
 
-      <div>
+      <div id="escribir-resena" class="scroll-mt-24">
         <div v-if="!sesion" class="text-sm text-neutral-500">
           Debes iniciar sesión como comprador para escribir una reseña.
         </div>

@@ -7,5 +7,11 @@ export default defineConfig({
   plugins: [vue(), tailwindcss()],
   server: {
     port: 5173,
+    // El repo vive en OneDrive, que no siempre emite eventos del sistema de archivos:
+    // sin polling Vite sirve módulos viejos o duplica instancias (p.ej. useCarrito.js).
+    watch: {
+      usePolling: true,
+      interval: 300,
+    },
   },
 })

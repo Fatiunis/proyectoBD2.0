@@ -1,9 +1,10 @@
 <script setup>
-import { ref, watch } from "vue";
+import { ref, computed, watch } from "vue";
 import { useRouter, RouterLink } from "vue-router";
 import { apiFetch } from "../services/api";
 import { useToast } from "../composables/useToast";
 import { useCarrito } from "../composables/useCarrito";
+import { useSesion } from "../composables/useSesion";
 import NavPublica from "../components/publico/NavPublica.vue";
 import ImagenProducto from "../components/ImagenProducto.vue";
 import OfertaLimitada from "../components/publico/OfertaLimitada.vue";
@@ -16,10 +17,17 @@ const props = defineProps({
 const router = useRouter();
 const { toast } = useToast();
 const { agregar } = useCarrito();
+const { sesion } = useSesion();
 
 const producto = ref(null);
 const cargando = ref(true);
 const cantidad = ref(1);
+
+const atributosVisibles = computed(() =>
+  Object.entries(producto.value?.atributos || {}).filter(
+    ([, valor]) => valor !== "" && valor !== null && valor !== undefined && !(typeof valor === "number" && Number.isNaN(valor))
+  )
+);
 
 async function cargarProducto(id) {
   cargando.value = true;
@@ -41,6 +49,14 @@ watch(() => props.id, (id) => id && cargarProducto(id), { immediate: true });
 function agregarAlCarrito() {
   agregar(producto.value, cantidad.value);
   toast(`${producto.value.nombre} agregado al carrito.`, "success");
+}
+
+const esComprador = computed(() => sesion.value?.rol === "comprador");
+const anclaResenas = computed(() => (esComprador.value ? "escribir-resena" : "resenas"));
+
+// Scroll manual: un RouterLink con el mismo hash que ya está en la URL no dispara navegación.
+function irAResenas() {
+  document.getElementById(anclaResenas.value)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function onCambiarVista(vista) {
@@ -71,13 +87,18 @@ function onBuscar(texto) {
         <div>
           <p class="text-[11px] font-semibold uppercase tracking-[0.15em] text-neutral-400">{{ producto.categoria.nombre }}</p>
           <h1 class="text-3xl lg:text-4xl font-extrabold text-neutral-950 tracking-tight mt-2 leading-tight">{{ producto.nombre }}</h1>
-          <p class="text-accent-700 font-extrabold text-3xl mt-3 mb-5">Q{{ producto.precio_base.toFixed(2) }}</p>
+          <p class="text-accent-700 font-extrabold text-3xl mt-3">Q{{ producto.precio_base.toFixed(2) }}</p>
+          <a
+            :href="`#${anclaResenas}`"
+            @click.prevent="irAResenas"
+            class="inline-block text-xs font-semibold text-neutral-500 hover:text-accent-700 underline-offset-4 hover:underline transition mt-2 mb-5"
+          >{{ esComprador ? "★ Escribir reseña" : "Ver reseñas" }}</a>
           <p class="text-[15px] text-neutral-600 leading-relaxed mb-7">{{ producto.descripcion }}</p>
 
           <div class="border-t border-neutral-200 pt-5 mb-6">
             <h2 class="text-xs font-semibold uppercase tracking-wide text-neutral-400 mb-3">Especificaciones</h2>
-            <dl v-if="Object.keys(producto.atributos || {}).length > 0" class="grid grid-cols-2 gap-x-6 gap-y-3">
-              <template v-for="[clave, valor] in Object.entries(producto.atributos)" :key="clave">
+            <dl v-if="atributosVisibles.length > 0" class="grid grid-cols-2 gap-x-6 gap-y-3">
+              <template v-for="[clave, valor] in atributosVisibles" :key="clave">
                 <dt class="text-xs text-neutral-400 self-start">{{ clave.replaceAll("_", " ") }}</dt>
                 <dd class="text-sm text-neutral-800 font-medium self-start">{{ Array.isArray(valor) ? valor.join(", ") : valor }}</dd>
               </template>
@@ -105,7 +126,7 @@ function onBuscar(texto) {
             >{{ producto.stock_disponible ? "Agregar al carrito" : "Sin stock" }}</button>
           </div>
 
-          <OfertaLimitada :producto-id="producto._id" />
+          <OfertaLimitada :producto-id="producto._id" :id-vendedor="producto.vendedor?.id_vendedor" />
         </div>
       </div>
 
