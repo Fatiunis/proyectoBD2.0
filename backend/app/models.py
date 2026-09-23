@@ -1,6 +1,8 @@
 """
 Modelos SQLAlchemy para las tablas de PostgreSQL que hoy consumen los
-blueprints migrados (auth, catalogo -> /api/categorias, vendedores).
+blueprints: auth (Usuario), direcciones (Usuario, Direccion), catalogo
+(Categoria, Producto, Inventario), resenas (Pedido, LineaPedido, para marcar
+la compra verificada) y vendedores (Pedido, LineaPedido, Producto).
 
 Los nombres de tabla (`__tablename__`) apuntan a las tablas reales creadas
 por `database/postgres/ddl_tiendaya.sql`; no se generan tablas nuevas.

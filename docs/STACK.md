@@ -14,8 +14,8 @@ frameworks oficiales que faciliten organizar el proyecto a medida que crece.
 
 | Capa | Antes | Ahora / plan | Por qué |
 |---|---|---|---|
-| Framework web | Flask, un solo archivo `main.py` | ✅ Flask, reorganizado en **Blueprints** por dominio (`backend/app/blueprints/`: auth, catálogo, checkout, historial, vendedores) con application factory (`create_app()`) | Flask ya era la elección correcta (liviano, sin ceremonia); el problema no era el framework sino que todo el código vivía en un único archivo. Los Blueprints son el mecanismo *oficial* de Flask para modularizar rutas sin cambiar de framework. |
-| Acceso a PostgreSQL | SQL crudo con `psycopg2` en cada endpoint | ✅ **SQLAlchemy** (`flask-sqlalchemy`), modelos en `backend/app/models.py` (`Usuario`, `Categoria`, `Producto`, `Inventario`, `Pedido`, `LineaPedido`) | Evita repetir apertura/cierre manual de conexión y manejo de errores en cada endpoint; da modelos declarativos reutilizables y sesiones manejadas automáticamente. El stored procedure `sp_procesar_checkout` se sigue invocando igual (`CALL` vía `db.session.execute(text(...))`), ya que la lógica transaccional compleja vive intencionalmente en la base de datos y no se reescribe en Python. `get_pg_connection()`/`psycopg2` crudo ya no existen en el código — quedaron completamente reemplazados. |
+| Framework web | Flask, un solo archivo `main.py` | ✅ Flask, reorganizado en **Blueprints** por dominio (`backend/app/blueprints/`: auth, catálogo, checkout, direcciones, historial, vendedores, más carrito, ofertas, reseñas y fraude de la Entrega 2) con application factory (`create_app()`) | Flask ya era la elección correcta (liviano, sin ceremonia); el problema no era el framework sino que todo el código vivía en un único archivo. Los Blueprints son el mecanismo *oficial* de Flask para modularizar rutas sin cambiar de framework. |
+| Acceso a PostgreSQL | SQL crudo con `psycopg2` en cada endpoint | ✅ **SQLAlchemy** (`flask-sqlalchemy`), modelos en `backend/app/models.py` (`Usuario`, `Direccion`, `Categoria`, `Producto`, `Inventario`, `Pedido`, `LineaPedido`) | Evita repetir apertura/cierre manual de conexión y manejo de errores en cada endpoint; da modelos declarativos reutilizables y sesiones manejadas automáticamente. El stored procedure `sp_procesar_checkout` se sigue invocando igual (`CALL` vía `db.session.execute(text(...))`), ya que la lógica transaccional compleja vive intencionalmente en la base de datos y no se reescribe en Python. `get_pg_connection()`/`psycopg2` crudo ya no existen en el código — quedaron completamente reemplazados. |
 | Acceso a MongoDB | `pymongo` directo | Se mantiene `pymongo` | `pymongo` **es** el driver oficial de MongoDB para Python; no hay una razón para introducir un ODM adicional (como MongoEngine) en un proyecto que ya usa agregaciones nativas y necesita flexibilidad de esquema. |
 | Autenticación | Verificación de credenciales sin tokens; el frontend manda `rol_solicitante` en cada request | Pendiente de definir (candidato: `flask-jwt-extended`) | Se documentará cuando se aborde esta fase. |
 
@@ -29,11 +29,12 @@ backend/
     __init__.py              # create_app(): Flask + CORS + registro de blueprints
     config.py                 # load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, CARRITO_TTL_SEGUNDOS, NEO4J_*
     extensions.py              # db (SQLAlchemy), Mongo (col_productos, col_historial, col_resenas), redis_client, neo4j_driver
-    models.py                   # Usuario, Categoria, Producto, Inventario, Pedido, LineaPedido
+    models.py                   # Usuario, Direccion, Categoria, Producto, Inventario, Pedido, LineaPedido
     lua/reservar_oferta.lua      # check-and-decrement atómico de la oferta (Entrega 2)
     blueprints/
       auth.py                  # /api/auth/register, /api/auth/login, /api/usuarios, /api/usuarios/<id>
       checkout.py               # /api/checkout (toma los productos del carrito en Redis)
+      direcciones.py            # /api/usuarios/<id_usuario>/direcciones (GET lista, POST alta; selector del checkout)
       catalogo.py                # /api/categorias, /api/categorias/<id>/filtros, /api/productos, /api/productos/<id>
       historial.py                # /api/historial (feed con filtros), /api/historial/<producto_id> (reconstrucción por fecha)
       vendedores.py                # /api/vendedores/<id>/ventas
@@ -71,13 +72,13 @@ Pendiente (menor, no bloqueante): F3 y F4, a decidir si se abordan.
 
 **Incidente de scope (2026-09-07)**: durante una tarea de restyle, el agente de frontend agregó por su cuenta un endpoint (`GET /api/historial/recientes`) y una función de "Cambios recientes" en el historial que no fueron solicitados, violando la instrucción explícita de no tocar `backend/`. Se revirtió por completo a pedido del usuario. Ojo para el futuro: en esta sesión se observó que mensajes del usuario enviados mientras un agente en background seguía "vivo" (resumable) a veces le llegaban directamente a ese agente además de a la sesión principal, causando trabajo no coordinado — vale la pena verificar el estado real de los archivos después de cualquier tarea larga en vez de asumir que solo se hizo lo que se pidió en el prompt original.
 
-**Sitio público migrado** (`frontend/app/src/views/VistaPublica.vue` + `VistaDetalleProducto.vue` + `components/publico/`): `NavPublica`, `CatalogoProductos` + `FiltrosCatalogo` + `TarjetaProducto`, `Carrito` + `FormularioCheckout`, `FormularioLogin`, `FormularioRegistro`. Sin Pinia — todo con composables reactivos simples (mismo patrón que `useSesion`), incluyendo el nuevo `composables/useCarrito.js` (persistido en `localStorage["carrito_tiendaya"]`).
+**Sitio público migrado** (`frontend/app/src/views/VistaPublica.vue` + `VistaDetalleProducto.vue` + `components/publico/`): `NavPublica`, `CatalogoProductos` + `FiltrosCatalogo` + `TarjetaProducto`, `Carrito` + `FormularioCheckout`, `FormularioLogin`, `FormularioRegistro`. Sin Pinia — todo con composables reactivos simples (mismo patrón que `useSesion`), incluyendo el nuevo `composables/useCarrito.js` (en ese momento persistido en `localStorage["carrito_tiendaya"]`; desde la Entrega 2 el carrito vive en Redis, vía `/api/carrito/<id_usuario>`, y requiere sesión iniciada — ver el historial de decisiones, 2026-09-13).
 
 **Página de detalle de producto (2026-09-07):** a pedido del usuario, se reemplazó el modal `DetalleProducto.vue` (overlay sobre el catálogo) por una página propia con URL real — ruta `/producto/:id` (`views/VistaDetalleProducto.vue`), registrada en `router/index.js`. `TarjetaProducto.vue` ahora navega con `RouterLink` en vez de emitir un evento `click` capturado por el padre, así que un producto se puede abrir en pestaña nueva (ctrl/cmd+click) como en un e-commerce real. La página muestra imagen grande, descripción, especificaciones (`atributos`) en una tabla de dos columnas, SKU/ID/stock/vendedor y el mismo flujo de "agregar al carrito" que tenía el modal. Como el carrito/login/registro siguen sin URL propia (viven como tabs internos de `VistaPublica.vue`), la barra de navegación en esta página redirige a `/` con un query param (`?vista=carrito`, `?vista=catalogo&q=...`) que `VistaPublica.vue` lee una sola vez al montar.
 
 **Nota importante:** el sitio vanilla original **no tenía carrito ni checkout implementados** (solo catálogo, detalle, login/registro) — esa parte no se "portó", se construyó nueva contra el contrato real del backend (`sp_procesar_checkout`), siguiendo el mismo patrón de composables. Verificado con un checkout real end-to-end (comprador `carlos.mendez@email.com`, credenciales de prueba documentadas en `README.md`).
 
-**Limitación conocida a resolver (no bloqueante):** no existe un endpoint para listar las direcciones de un comprador, así que el checkout pide el "ID de dirección de envío" como número manual en vez de un selector. Si se agrega ese endpoint en el backend más adelante, hay que actualizar `FormularioCheckout.vue` para usar un selector real.
+**~~Limitación conocida a resolver (no bloqueante)~~ ✅ resuelta (2026-09-23):** antes no existía un endpoint para listar las direcciones de un comprador, así que el checkout pedía el "ID de dirección de envío" como número manual. Ahora `GET`/`POST /api/usuarios/<id_usuario>/direcciones` (`backend/app/blueprints/direcciones.py`) las lista y las crea, y `FormularioCheckout.vue` usa un selector real (ver el historial de decisiones al final).
 
 **Utilidades compartidas migradas** (`frontend/app/src/`), reemplazando `frontend/js/common.js`:
 - `services/api.js` — `apiFetch`, port 1:1 del wrapper de fetch original.
@@ -282,3 +283,28 @@ frontend/app/
   la página del producto tiene un enlace "★ Escribir reseña" bajo el
   precio; el router hace scroll al ancla esperando a que el producto
   termine de cargar. Verificado en el navegador real (pedido 15).
+- 2026-09-23: (1) **Direcciones de envío**: nuevo blueprint
+  `backend/app/blueprints/direcciones.py` (`GET` y `POST
+  /api/usuarios/<id_usuario>/direcciones`) y modelo SQLAlchemy `Direccion`
+  en `models.py` (tabla `direcciones` del DDL). La primera dirección de un
+  usuario queda como principal y marcar otra como principal desmarca la
+  anterior (el alta bloquea la fila del usuario con `SELECT ... FOR UPDATE`
+  para que dos altas simultáneas no dejen dos principales).
+  `FormularioCheckout.vue` deja de pedir el ID de dirección a mano: muestra
+  un selector con las direcciones del comprador, con la principal
+  preseleccionada, y un mini formulario para agregar una si no tiene
+  ninguna o quiere otra. Antes el usuario tenía que adivinar el ID y el
+  checkout fallaba con "La dirección X no pertenece al comprador Y".
+  (2) **Imágenes desde el panel admin**: `FormularioProducto.vue` agrega la
+  sección "Imágenes del producto" (hasta 10 links http/https, miniatura de
+  vista previa, radio de portada y botones ↑/↓ para reordenar).
+  `POST /api/productos` valida y normaliza `imagenes` con
+  `_normalizar_imagenes` (lista de strings u objetos `{url, es_portada}` →
+  `[{id_imagen, url, es_portada, orden}]`, una sola portada: la marcada o
+  la primera; quita duplicados; 400 si hay una URL inválida o más de 10),
+  **antes** de escribir en Postgres o Mongo, así un error no deja filas
+  huérfanas. En edición se mantiene el merge de F2: sin `imagenes` se
+  conservan las existentes y con `[]` se vacían; el formulario siempre
+  envía la lista completa. Estas imágenes viven solo en Mongo: la
+  migración completa las borra y `--incremental` las conserva (ver
+  `README.md`).

@@ -13,6 +13,7 @@ flowchart TB
     subgraph Backend["Flask (backend/app) — Blueprints por dominio"]
         Auth[auth.py]
         Checkout[checkout.py]
+        Direcciones[direcciones.py]
         Catalogo[catalogo.py]
         Historial[historial.py]
         Vendedores[vendedores.py]
@@ -23,7 +24,7 @@ flowchart TB
     end
 
     subgraph Persistencia
-        PG[("PostgreSQL\nusuarios, pedidos, pagos,\ninventario, sp_procesar_checkout")]
+        PG[("PostgreSQL\nusuarios, direcciones, pedidos, pagos,\ninventario, sp_procesar_checkout")]
         Mongo[("MongoDB\ncol_productos, col_historial,\ncol_resenas")]
         Redis[("Redis\ncarrito:{id_usuario} (TTL 30 min por inactividad)\noferta:{producto_id}:stock (Lua atómico,\nTTL = duración de la oferta)")]
         Neo4j[("Neo4j\n(:Cuenta)-[:CALIFICO]->(:Producto)")]
@@ -32,6 +33,7 @@ flowchart TB
     Vue -- "apiFetch (REST, JSON)" --> Backend
 
     Auth --> PG
+    Direcciones --> PG
     Checkout -- "CALL sp_procesar_checkout\n(bloqueo pesimista)" --> PG
     Catalogo --> Mongo
     Catalogo -. "id_sql_origen (FK lógica,\nsin integridad garantizada)" .-> PG

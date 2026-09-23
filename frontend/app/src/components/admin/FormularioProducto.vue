@@ -25,6 +25,14 @@ const categoriaId = ref(null);
 const atributosValores = ref({});
 const atributosPersonalizados = ref([{ clave: "", valor: "" }]);
 
+const MAX_IMAGENES = 10;
+let siguienteIdFila = 0;
+function nuevaFilaImagen(url = "") {
+  return { id: siguienteIdFila++, url, error: false };
+}
+const filasImagenes = ref([nuevaFilaImagen()]);
+const portadaId = ref(filasImagenes.value[0].id);
+
 const categoriaActual = computed(() => categorias.value.find((c) => c.id_categoria === categoriaId.value) || null);
 const esquemaAtributos = computed(() => categoriaActual.value?.esquema_atributos || []);
 
@@ -42,6 +50,22 @@ function agregarFilaPersonalizada() {
 
 function quitarFilaPersonalizada(index) {
   atributosPersonalizados.value.splice(index, 1);
+}
+
+function agregarFilaImagen() {
+  if (filasImagenes.value.length >= MAX_IMAGENES) return;
+  filasImagenes.value.push(nuevaFilaImagen());
+}
+
+function quitarFilaImagen(index) {
+  filasImagenes.value.splice(index, 1);
+}
+
+function moverFilaImagen(index, delta) {
+  const destino = index + delta;
+  const filas = filasImagenes.value;
+  if (destino < 0 || destino >= filas.length) return;
+  [filas[index], filas[destino]] = [filas[destino], filas[index]];
 }
 
 function onCambiarCategoria() {
@@ -63,6 +87,13 @@ if (props.productoParaEditar) {
     .filter(([clave]) => !clavesEsquema.has(clave))
     .map(([clave, valor]) => ({ clave, valor: String(valor) }));
   atributosPersonalizados.value = extras.length > 0 ? extras : [{ clave: "", valor: "" }];
+
+  const imagenesOrdenadas = [...(p.imagenes || [])].sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
+  if (imagenesOrdenadas.length > 0) {
+    filasImagenes.value = imagenesOrdenadas.map((img) => nuevaFilaImagen(img.url || ""));
+    const indicePortada = imagenesOrdenadas.findIndex((img) => img.es_portada);
+    portadaId.value = filasImagenes.value[Math.max(indicePortada, 0)].id;
+  }
 } else {
   categoriaId.value = categorias.value[0]?.id_categoria ?? null;
   inicializarAtributos({});
@@ -97,6 +128,24 @@ async function guardarProducto() {
     atributos[clave] = valor;
   });
 
+  const filasConUrl = filasImagenes.value
+    .map((fila) => ({ id: fila.id, url: fila.url.trim() }))
+    .filter((fila) => fila.url !== "");
+  if (filasConUrl.length > MAX_IMAGENES) {
+    toast(`Máximo ${MAX_IMAGENES} imágenes por producto.`, "error");
+    return;
+  }
+  const urlInvalida = filasConUrl.find((fila) => !/^https?:\/\//i.test(fila.url));
+  if (urlInvalida) {
+    toast(`La URL "${urlInvalida.url}" debe empezar con http:// o https://.`, "error");
+    return;
+  }
+  const hayPortada = filasConUrl.some((fila) => fila.id === portadaId.value);
+  const imagenes = filasConUrl.map((fila, index) => ({
+    url: fila.url,
+    es_portada: hayPortada ? fila.id === portadaId.value : index === 0,
+  }));
+
   const payload = {
     sku: sku.value,
     nombre: nombre.value,
@@ -109,6 +158,7 @@ async function guardarProducto() {
     nombre_vendedor: sesion.value.nombre,
     rol_solicitante: sesion.value.rol,
     atributos,
+    imagenes,
   };
 
   const { ok, data } = await apiFetch("/productos", {
@@ -202,6 +252,59 @@ async function guardarProducto() {
           </div>
         </div>
         <p class="text-[11px] text-neutral-400 mt-2">La "clave" se usa como nombre del campo en la base documental (sin espacios ni acentos, ej. <code>talla_zapato</code>).</p>
+      </div>
+
+      <div class="p-4 bg-neutral-50 border border-neutral-200 rounded-xl">
+        <div class="flex justify-between items-center mb-3">
+          <h4 class="text-xs font-semibold uppercase tracking-wide text-neutral-400">Imágenes del producto</h4>
+          <button
+            type="button"
+            @click="agregarFilaImagen"
+            :disabled="filasImagenes.length >= MAX_IMAGENES"
+            class="text-xs font-semibold text-accent-700 hover:underline disabled:text-neutral-300 disabled:no-underline disabled:cursor-not-allowed"
+          >+ Agregar imagen</button>
+        </div>
+        <div class="grid grid-cols-[40px_1fr_56px_44px_28px] gap-2 mb-2">
+          <span></span>
+          <span class="text-[10px] font-bold uppercase text-neutral-400">URL</span>
+          <span class="text-[10px] font-bold uppercase text-neutral-400 text-center">Portada</span>
+          <span class="text-[10px] font-bold uppercase text-neutral-400 text-center">Orden</span>
+          <span></span>
+        </div>
+        <div class="space-y-2">
+          <div v-for="(fila, index) in filasImagenes" :key="fila.id" class="grid grid-cols-[40px_1fr_56px_44px_28px] gap-2 items-center">
+            <div class="w-10 h-10 rounded-lg overflow-hidden bg-neutral-100 border border-neutral-200 flex items-center justify-center">
+              <img
+                v-if="fila.url.trim() && !fila.error"
+                :src="fila.url.trim()"
+                alt=""
+                class="w-full h-full object-cover"
+                @error="fila.error = true"
+              >
+              <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="w-5 h-5 text-neutral-300">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <circle cx="8.5" cy="9.5" r="1.5" />
+                <path d="M21 16l-5-5-9 9" />
+              </svg>
+            </div>
+            <input
+              type="text"
+              v-model="fila.url"
+              @input="fila.error = false"
+              placeholder="https://..."
+              class="min-w-0 border border-neutral-300 p-1.5 rounded-lg bg-white text-xs focus:ring-2 focus:ring-accent-600 focus:border-accent-600 outline-none transition"
+            >
+            <label class="flex justify-center">
+              <input type="radio" name="portada-imagen" :value="fila.id" v-model="portadaId" class="accent-accent-600" title="Marcar como portada">
+            </label>
+            <div class="flex justify-center gap-1">
+              <button type="button" @click="moverFilaImagen(index, -1)" :disabled="index === 0" class="text-neutral-400 hover:text-neutral-950 disabled:text-neutral-200 text-xs font-bold transition" title="Subir">↑</button>
+              <button type="button" @click="moverFilaImagen(index, 1)" :disabled="index === filasImagenes.length - 1" class="text-neutral-400 hover:text-neutral-950 disabled:text-neutral-200 text-xs font-bold transition" title="Bajar">↓</button>
+            </div>
+            <button type="button" @click="quitarFilaImagen(index)" class="text-neutral-400 hover:text-red-600 text-sm font-bold transition" title="Quitar imagen">✕</button>
+          </div>
+        </div>
+        <p class="text-[11px] text-neutral-400 mt-2">Hasta {{ MAX_IMAGENES }} links (http:// o https://). Si no marcas ninguna como portada, se usa la primera.</p>
       </div>
 
       <button type="submit" class="w-full py-3 mt-2 bg-neutral-950 hover:bg-neutral-800 text-white font-semibold rounded-full text-sm transition">Guardar en base documental</button>

@@ -1,3 +1,5 @@
+import argparse
+import json
 import os
 import sys
 from datetime import datetime, timezone, timedelta
@@ -61,18 +63,54 @@ IMAGEN_GENERICA_POR_CATEGORIA = {
     "Laptops":   ("photo-1603302576837-37561b2e2302", "photo-1640955014216-75201056c829"),
     "Monitores": ("photo-1534423861386-85a16f5d13fd", "photo-1593305841991-05c297ba4575"),
     "Playeras":  ("photo-1571455786673-9d9d6c194f90", "photo-1726140872004-850c80900ae3"),
+    # Subcategorías agregadas por la semilla masiva (datos_semilla_masivos.sql)
+    "Celulares":    ("photo-1511707171634-5f897ff02aa9", "photo-1598327105666-5b89351aff97"),
+    "Audífonos":    ("photo-1505740420928-5e560c06d30e", "photo-1546435770-a3e426bf472b"),
+    "Teclados":     ("photo-1587829741301-dc798b83add3", "photo-1595225476474-87563907a212"),
+    "Mouse":        ("photo-1615663245857-ac93bb7c39e7", "photo-1527864550417-7fd91fc51a46"),
+    "Tablets":      ("photo-1544244015-0df4b3ffc6b0", "photo-1585790050230-5dd28404ccb9"),
+    "Smartwatches": ("photo-1546868871-7041f2a55e12", "photo-1579586337278-3befd40fd17a"),
+    "Jeans":        ("photo-1542272604-787c3835535d", "photo-1604176354204-9268737828e4"),
+    "Sudaderas":    ("photo-1556821840-3a63f95609a7", "photo-1620799140408-edc6dcb6d633"),
+    "Tenis":        ("photo-1542291026-7eec264c27ff", "photo-1600185365483-26d7a4cc7519"),
+    "Vestidos":     ("photo-1595777457583-95e059d581b8", "photo-1515372039744-b8f02a3ae446"),
+    "Gorras":       ("photo-1588850561407-ed78c282e89b", "photo-1521369909029-2afed882baee"),
+    "Electrodomésticos de Cocina": ("photo-1570222094114-d054a817e56b", "photo-1585515320310-259814833e62"),
+    "Utensilios de Cocina":        ("photo-1590794056226-79ef3a8147e1", "photo-1584269600464-37b1b58a9fe7"),
+    "Bicicletas":         ("photo-1485965120184-e220f721d03e", "photo-1571068316344-75bc76f77890"),
+    "Pesas y Mancuernas": ("photo-1638536532686-d610adfc8e5c", "photo-1583454110551-21f2fa2afe61"),
+    "Tapetes de Yoga":    ("photo-1601925260368-ae2f83cf8b7f", "photo-1592432678016-e910b452f9a2"),
+    "Mochilas":           ("photo-1553062407-98eeb64c6a62", "photo-1622560480605-d83c853bc5c3"),
+    "Perfumes":           ("photo-1541643600914-78b084683601", "photo-1523293182086-7651a899d37f"),
+    "Cuidado de la Piel": ("photo-1556228578-8c89e6adf883", "photo-1571781926291-c477ebfd024b"),
 }
+
+# ============================================================================
+# SEMILLA MASIVA (1000 productos): atributos e imágenes por SKU
+# ============================================================================
+# Generado junto con database/postgres/datos_semilla_masivos.sql por
+# generar_semilla_masiva.py. Cada SKU trae sus atributos (según el esquema_atributos de
+# su subcategoría, más atributos personalizados en ~20% de los casos) y de 1 a 3 photo-id
+# de Unsplash (el primero es la portada). Si el archivo no existe, la migración sigue
+# funcionando igual que antes para los 15 productos originales.
+RUTA_CATALOGO_MASIVO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "datos_semilla_masivos_catalogo.json")
+if os.path.exists(RUTA_CATALOGO_MASIVO):
+    with open(RUTA_CATALOGO_MASIVO, encoding="utf-8") as _f:
+        CATALOGO_SEMILLA_MASIVA = json.load(_f)
+else:
+    CATALOGO_SEMILLA_MASIVA = {}
 
 
 def imagenes_para_producto(sku, nombre_categoria):
-    """Devuelve el arreglo de imágenes embebidas (portada + detalle) para un producto."""
-    ids = IMAGENES_POR_SKU.get(sku) or IMAGEN_GENERICA_POR_CATEGORIA.get(nombre_categoria)
+    """Devuelve el arreglo de imágenes embebidas (la primera es la portada) para un producto."""
+    ids = (IMAGENES_POR_SKU.get(sku)
+           or (CATALOGO_SEMILLA_MASIVA.get(sku) or {}).get("imagenes")
+           or IMAGEN_GENERICA_POR_CATEGORIA.get(nombre_categoria))
     if not ids:
         return []
-    id_portada, id_detalle = ids
     return [
-        {"id_imagen": 1, "url": _UNSPLASH.format(id_portada, 1200), "es_portada": True, "orden": 1},
-        {"id_imagen": 2, "url": _UNSPLASH.format(id_detalle, 1200), "es_portada": False, "orden": 2},
+        {"id_imagen": i, "url": _UNSPLASH.format(id_foto, 1200), "es_portada": i == 1, "orden": i}
+        for i, id_foto in enumerate(ids, start=1)
     ]
 
 
@@ -152,15 +190,29 @@ ATRIBUTOS_POR_SKU = {
 def generar_atributos_heterogeneos(categoria_nombre: str, sku: str, descripcion: str) -> dict:
     if sku in ATRIBUTOS_POR_SKU:
         return ATRIBUTOS_POR_SKU[sku]
+    if sku in CATALOGO_SEMILLA_MASIVA:
+        return CATALOGO_SEMILLA_MASIVA[sku]["atributos"]
 
     # Cualquier producto fuera de la semilla (creado después, vía script) recibe
     # un atributo genérico de respaldo en lugar de fallar la migración.
     return {"descripcion_detallada": descripcion}
 
 
-def ejecutar_migracion():
+def ejecutar_migracion(incremental=False):
+    """
+    Modo completo (por defecto): borra y recrea `productos` e `historial_cambios_productos`
+    desde PostgreSQL -- se pierden las ediciones hechas desde el panel admin.
+
+    Modo incremental (--incremental): NO borra nada. Solo inserta los productos de
+    PostgreSQL que todavía no tienen documento en Mongo (ni por id_sql_origen ni por sku),
+    con su evento CREACION_PRODUCTO en el historial. Los documentos existentes, sus
+    ediciones del admin y sus eventos quedan intactos. Es idempotente: correrlo de nuevo
+    no inserta nada. Es el modo recomendado para cargar la semilla masiva sobre una base
+    que ya está en uso.
+    """
     print("==================================================================")
-    print(" INICIANDO PROCESO DE MIGRACIÓN: PostgreSQL -> MongoDB")
+    print(" INICIANDO PROCESO DE MIGRACIÓN: PostgreSQL -> MongoDB"
+          + (" (INCREMENTAL)" if incremental else ""))
     print("==================================================================")
 
     # 1. Conexión a las bases de datos
@@ -271,8 +323,22 @@ def ejecutar_migracion():
 
     # 4. Carga de datos en MongoDB (Estrategia idempotente con bulk upsert o recreación)
     print("[*] Escribiendo documentos en MongoDB...")
-    col_productos.drop()
-    col_historial.drop()
+    if incremental:
+        # Se descartan los productos que ya tienen documento: por id_sql_origen (migrados o
+        # creados desde el admin) o por sku (defensa extra, el sku es único en ambos lados).
+        ids_existentes = set(col_productos.distinct("id_sql_origen"))
+        skus_existentes = set(col_productos.distinct("sku"))
+        nuevos = [
+            i for i, doc in enumerate(documentos_productos)
+            if doc["id_sql_origen"] not in ids_existentes and doc["sku"] not in skus_existentes
+        ]
+        documentos_productos = [documentos_productos[i] for i in nuevos]
+        documentos_historial = [documentos_historial[i] for i in nuevos]
+        print(f"[*] Modo incremental: {len(documentos_productos)} producto(s) nuevo(s) por insertar; "
+              f"{len(productos_pg) - len(documentos_productos)} ya existían en Mongo y no se tocan")
+    else:
+        col_productos.drop()
+        col_historial.drop()
 
     if documentos_productos:
         col_productos.insert_many(documentos_productos)
@@ -320,4 +386,9 @@ def ejecutar_migracion():
 
 
 if __name__ == "__main__":
-    ejecutar_migracion()
+    parser = argparse.ArgumentParser(description="Migra el catálogo de productos de PostgreSQL a MongoDB.")
+    parser.add_argument(
+        "--incremental", action="store_true",
+        help="No borra las colecciones: solo inserta los productos de Postgres que aún no están en Mongo.",
+    )
+    ejecutar_migracion(incremental=parser.parse_args().incremental)

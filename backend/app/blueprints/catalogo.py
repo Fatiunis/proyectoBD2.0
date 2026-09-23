@@ -217,6 +217,63 @@ def get_producto_detalle(producto_id):
     return jsonify(doc)
 
 
+MAX_IMAGENES_POR_PRODUCTO = 10
+MAX_LARGO_URL_IMAGEN = 2048
+
+
+def _normalizar_imagenes(imagenes):
+    """
+    Valida y normaliza el campo "imagenes" del payload de alta/edición de producto.
+
+    Acepta una lista (máx. MAX_IMAGENES_POR_PRODUCTO) cuyos elementos son un string
+    (la URL) o un objeto {"url": ..., "es_portada": bool opcional}. Cada URL debe ser
+    un string no vacío tras strip, empezar con http:// o https:// y medir como máximo
+    MAX_LARGO_URL_IMAGEN caracteres. Se descartan URLs duplicadas (queda la primera
+    aparición) y se devuelve el formato que usan los documentos del catálogo:
+        [{"id_imagen": i, "url": ..., "es_portada": bool, "orden": i}, ...]
+    con una sola portada: la primera marcada con es_portada=true o, si ninguna lo
+    está, la primera de la lista.
+
+    Devuelve (imagenes_normalizadas, None) o (None, mensaje_error).
+    """
+    if not isinstance(imagenes, list):
+        return None, "El campo imagenes debe ser una lista"
+    if len(imagenes) > MAX_IMAGENES_POR_PRODUCTO:
+        return None, f"Máximo {MAX_IMAGENES_POR_PRODUCTO} imágenes por producto"
+
+    urls = []
+    marcadas_portada = []
+    vistas = set()
+    for n, item in enumerate(imagenes, start=1):
+        error = f"La imagen {n} no es una URL válida (debe empezar con http:// o https://)"
+        if isinstance(item, str):
+            url, es_portada = item, False
+        elif isinstance(item, dict):
+            url, es_portada = item.get("url"), item.get("es_portada") is True
+        else:
+            return None, error
+
+        if not isinstance(url, str):
+            return None, error
+        url = url.strip()
+        if (not url or len(url) > MAX_LARGO_URL_IMAGEN
+                or not url.lower().startswith(("http://", "https://"))):
+            return None, error
+
+        if url in vistas:
+            continue
+        vistas.add(url)
+        urls.append(url)
+        marcadas_portada.append(es_portada)
+
+    indice_portada = marcadas_portada.index(True) if True in marcadas_portada else 0
+    normalizadas = [
+        {"id_imagen": i, "url": url, "es_portada": (i - 1) == indice_portada, "orden": i}
+        for i, url in enumerate(urls, start=1)
+    ]
+    return normalizadas, None
+
+
 @bp.route("/api/productos", methods=["POST"])
 def crear_o_actualizar_producto():
     """
@@ -275,6 +332,14 @@ def crear_o_actualizar_producto():
                 "error": f"Faltan campos obligatorios para dar de alta un producto nuevo: {', '.join(faltantes)}"
             }), 400
 
+    # Validación de imágenes ANTES de tocar Postgres/Mongo: un error aquí no debe
+    # dejar filas huérfanas en productos/inventario ni un documento a medias.
+    imagenes_normalizadas = None
+    if "imagenes" in data:
+        imagenes_normalizadas, error_imagenes = _normalizar_imagenes(data["imagenes"])
+        if error_imagenes:
+            return jsonify({"error": error_imagenes}), 400
+
     doc_id = existente["_id"] if existente else f"PROD-{data['sku'].replace(' ', '-').upper()}"
     now = datetime.now(ZONA_GUATEMALA)
 
@@ -332,7 +397,7 @@ def crear_o_actualizar_producto():
             # Antes: placeholder de https://via.placeholder.com/300 (servicio dado de baja).
             # El frontend ya hace fallback a un ícono SVG cuando no hay imágenes, así que un
             # array vacío es el default correcto en vez de una URL rota.
-            "imagenes": data.get("imagenes", []),
+            "imagenes": imagenes_normalizadas if imagenes_normalizadas is not None else [],
             "atributos": data.get("atributos", {}),
         }
     else:
@@ -347,7 +412,7 @@ def crear_o_actualizar_producto():
         if "stock_disponible" in data:
             nuevo_doc["stock_disponible"] = int(data["stock_disponible"])
         if "imagenes" in data:
-            nuevo_doc["imagenes"] = data["imagenes"]
+            nuevo_doc["imagenes"] = imagenes_normalizadas
         if "atributos" in data:
             nuevo_doc["atributos"] = data["atributos"]
         if "id_categoria" in data or "nombre_categoria" in data:
