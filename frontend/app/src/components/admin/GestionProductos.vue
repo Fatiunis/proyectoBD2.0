@@ -6,6 +6,7 @@ import { useToast } from "../../composables/useToast";
 import { useCategorias } from "../../composables/useCategorias";
 import FormularioProducto from "./FormularioProducto.vue";
 import ModalAdmin from "./ModalAdmin.vue";
+import Paginacion from "../comunes/Paginacion.vue";
 
 const { sesion } = useSesion();
 const { toast } = useToast();
@@ -18,13 +19,25 @@ const cargando = ref(true);
 const productoParaEditar = ref(null);
 const claveFormulario = ref(0);
 const mostrarModal = ref(false);
+const pagina = ref(1);
+const total = ref(0);
+const POR_PAGINA = 24;
 
 const tituloModal = computed(() => (productoParaEditar.value ? "Editar producto" : "Nuevo producto"));
 
 async function cargarProductos() {
-  const path = esVendedor.value ? `/productos?vendedor_id=${sesion.value.id_usuario}` : "/productos";
-  const { data } = await apiFetch(path);
-  productos.value = data || [];
+  const params = new URLSearchParams();
+  if (esVendedor.value) params.set("vendedor_id", sesion.value.id_usuario);
+  params.set("pagina", pagina.value);
+  params.set("por_pagina", POR_PAGINA);
+  const { data } = await apiFetch(`/productos?${params.toString()}`);
+  productos.value = data.items || [];
+  total.value = data.total || 0;
+}
+
+function onCambiarPagina(nueva) {
+  pagina.value = nueva;
+  cargarProductos();
 }
 
 async function editarProducto(id) {
@@ -112,6 +125,8 @@ onMounted(async () => {
         </table>
       </div>
     </div>
+
+    <Paginacion :total="total" :pagina="pagina" :por-pagina="POR_PAGINA" @cambiar-pagina="onCambiarPagina" />
 
     <ModalAdmin :abierto="mostrarModal" :titulo="tituloModal" ancho-clase="max-w-3xl" @cerrar="mostrarModal = false">
       <FormularioProducto

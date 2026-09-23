@@ -27,3 +27,15 @@ db.productos.createIndex(
   { "nombre": "text", "descripcion": "text", "sku": "text" },
   { weights: { nombre: 5, sku: 3, descripcion: 1 }, default_language: "spanish", name: "idx_texto_busqueda" }
 );
+
+// Cubre la vista "Todas las categorías" del catálogo (sin filtro de categoría
+// seleccionado), que es la que más se usa y la que ahora, con 1000+ productos,
+// más necesita paginación eficiente. El índice existente
+// idx_categoria_activo_precio no la cubre porque el campo de categoría no está
+// fijado por igualdad en esa consulta (query={"activo": true}, sort por
+// precio_base) -- sin este índice, Mongo escanea y ordena en memoria toda la
+// colección en cada página.
+db.productos.createIndex(
+  { "activo": 1, "precio_base": 1 },
+  { name: "idx_activo_precio" }
+);

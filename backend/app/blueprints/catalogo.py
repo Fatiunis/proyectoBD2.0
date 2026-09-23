@@ -201,11 +201,29 @@ def get_productos():
     else:
         cursor = col_productos.find(query, proyeccion).sort("precio_base", ASCENDING)
 
-    docs = list(cursor)
+    try:
+        pagina = max(1, int(request.args.get("pagina", 1)))
+    except ValueError:
+        pagina = 1
+    try:
+        por_pagina = int(request.args.get("por_pagina", 24))
+    except ValueError:
+        por_pagina = 24
+    por_pagina = min(max(por_pagina, 1), 100)
 
+    total = col_productos.count_documents(query)
+
+    docs = list(cursor.skip((pagina - 1) * por_pagina).limit(por_pagina))
     for d in docs:
         d["_id"] = str(d["_id"])
-    return jsonify(docs)
+
+    return jsonify({
+        "items": docs,
+        "total": total,
+        "pagina": pagina,
+        "por_pagina": por_pagina,
+        "total_paginas": (total + por_pagina - 1) // por_pagina if total else 0,
+    })
 
 
 @bp.route("/api/productos/<producto_id>", methods=["GET"])
@@ -446,5 +464,23 @@ def crear_o_actualizar_producto():
         }
     }
     col_historial.insert_one(evento)
+
+    # Sincronización "mejor esfuerzo" del stock hacia Postgres: si el admin edita el
+    # stock de un producto YA EXISTENTE (que tiene fila en Postgres), esa fila de
+    # Inventario también se actualiza para que sp_procesar_checkout (que opera SOLO
+    # sobre Postgres) no venda con un stock viejo. Si el producto es legacy y no
+    # tiene id_sql_origen, no hay nada que sincronizar.
+    if not es_nuevo and "stock_disponible" in data:
+        id_sql_origen_existente = existente.get("id_sql_origen")
+        if id_sql_origen_existente is not None:
+            try:
+                inventario_pg = db.session.query(Inventario).filter_by(id_producto=id_sql_origen_existente).first()
+                if inventario_pg:
+                    inventario_pg.stock_disponible = int(data["stock_disponible"])
+                    db.session.commit()
+            except Exception as e:
+                db.session.rollback()
+                print(f"[catalogo] ADVERTENCIA: producto {doc_id} actualizado en Mongo, pero no se pudo "
+                      f"sincronizar Inventario.stock_disponible en Postgres: {e}")
 
     return jsonify({"mensaje": "Producto guardado con éxito", "producto_id": doc_id}), 201

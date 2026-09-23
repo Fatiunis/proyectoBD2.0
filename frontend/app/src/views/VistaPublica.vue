@@ -6,6 +6,7 @@ import CatalogoProductos from "../components/publico/CatalogoProductos.vue";
 import Carrito from "../components/publico/Carrito.vue";
 import FormularioLogin from "../components/publico/FormularioLogin.vue";
 import FormularioRegistro from "../components/publico/FormularioRegistro.vue";
+import PerfilComprador from "../components/publico/PerfilComprador.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -35,6 +36,7 @@ function onBuscar(texto) {
       <FormularioLogin v-if="vistaActual === 'login'" @exito="cambiarVista('catalogo')" @ir-a-registro="cambiarVista('registro')" />
       <FormularioRegistro v-else-if="vistaActual === 'registro'" @exito="cambiarVista('login')" />
       <Carrito v-else-if="vistaActual === 'carrito'" @completado="cambiarVista('catalogo')" />
+      <PerfilComprador v-else-if="vistaActual === 'perfil'" />
       <CatalogoProductos v-else :busqueda="busqueda" />
     </main>
 
