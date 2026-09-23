@@ -15,7 +15,7 @@ frameworks oficiales que faciliten organizar el proyecto a medida que crece.
 | Capa | Antes | Ahora / plan | Por qué |
 |---|---|---|---|
 | Framework web | Flask, un solo archivo `main.py` | ✅ Flask, reorganizado en **Blueprints** por dominio (`backend/app/blueprints/`: auth, catálogo, checkout, historial, vendedores) con application factory (`create_app()`) | Flask ya era la elección correcta (liviano, sin ceremonia); el problema no era el framework sino que todo el código vivía en un único archivo. Los Blueprints son el mecanismo *oficial* de Flask para modularizar rutas sin cambiar de framework. |
-| Acceso a PostgreSQL | SQL crudo con `psycopg2` en cada endpoint | ✅ **SQLAlchemy** (`flask-sqlalchemy`), modelos en `backend/app/models.py` (`Usuario`, `Categoria`, `Producto`, `Pedido`, `LineaPedido`) | Evita repetir apertura/cierre manual de conexión y manejo de errores en cada endpoint; da modelos declarativos reutilizables y sesiones manejadas automáticamente. El stored procedure `sp_procesar_checkout` se sigue invocando igual (`CALL` vía `db.session.execute(text(...))`), ya que la lógica transaccional compleja vive intencionalmente en la base de datos y no se reescribe en Python. `get_pg_connection()`/`psycopg2` crudo ya no existen en el código — quedaron completamente reemplazados. |
+| Acceso a PostgreSQL | SQL crudo con `psycopg2` en cada endpoint | ✅ **SQLAlchemy** (`flask-sqlalchemy`), modelos en `backend/app/models.py` (`Usuario`, `Categoria`, `Producto`, `Inventario`, `Pedido`, `LineaPedido`) | Evita repetir apertura/cierre manual de conexión y manejo de errores en cada endpoint; da modelos declarativos reutilizables y sesiones manejadas automáticamente. El stored procedure `sp_procesar_checkout` se sigue invocando igual (`CALL` vía `db.session.execute(text(...))`), ya que la lógica transaccional compleja vive intencionalmente en la base de datos y no se reescribe en Python. `get_pg_connection()`/`psycopg2` crudo ya no existen en el código — quedaron completamente reemplazados. |
 | Acceso a MongoDB | `pymongo` directo | Se mantiene `pymongo` | `pymongo` **es** el driver oficial de MongoDB para Python; no hay una razón para introducir un ODM adicional (como MongoEngine) en un proyecto que ya usa agregaciones nativas y necesita flexibilidad de esquema. |
 | Autenticación | Verificación de credenciales sin tokens; el frontend manda `rol_solicitante` en cada request | Pendiente de definir (candidato: `flask-jwt-extended`) | Se documentará cuando se aborde esta fase. |
 
@@ -27,14 +27,20 @@ backend/
   main.py                  # entry point: from app import create_app; app.run(...)
   app/
     __init__.py              # create_app(): Flask + CORS + registro de blueprints
-    config.py                 # load_dotenv(), PG_CONFIG, MONGO_URI
-    extensions.py              # cliente Mongo (db, col_productos, col_historial) + get_pg_connection()
+    config.py                 # load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, CARRITO_TTL_SEGUNDOS, NEO4J_*
+    extensions.py              # db (SQLAlchemy), Mongo (col_productos, col_historial, col_resenas), redis_client, neo4j_driver
+    models.py                   # Usuario, Categoria, Producto, Inventario, Pedido, LineaPedido
+    lua/reservar_oferta.lua      # check-and-decrement atómico de la oferta (Entrega 2)
     blueprints/
       auth.py                  # /api/auth/register, /api/auth/login, /api/usuarios, /api/usuarios/<id>
-      checkout.py               # /api/checkout
+      checkout.py               # /api/checkout (toma los productos del carrito en Redis)
       catalogo.py                # /api/categorias, /api/categorias/<id>/filtros, /api/productos, /api/productos/<id>
-      historial.py                # /api/historial/<producto_id>
+      historial.py                # /api/historial (feed con filtros), /api/historial/<producto_id> (reconstrucción por fecha)
       vendedores.py                # /api/vendedores/<id>/ventas
+      carrito.py                   # /api/carrito/<id_usuario> (Redis, Entrega 2)
+      ofertas.py                   # /api/ofertas, /api/ofertas/<producto_id>/reservar (Redis + Lua, Entrega 2)
+      resenas.py                   # /api/resenas (Mongo + sincronización a Neo4j, Entrega 2)
+      fraude.py                    # /api/fraude/alertas (Cypher de varios saltos, Entrega 2)
 ```
 
 ## Frontend
@@ -57,7 +63,7 @@ Pendiente (menor, no bloqueante): F3 y F4, a decidir si se abordan.
 
 **Panel admin migrado** (`frontend/app/src/views/VistaAdmin.vue` + `components/admin/`): `LoginAdmin`, `SidebarAdmin`, `GestionProductos` + `FormularioProducto`, `GestionCategorias` + `FormularioCategoria`, `GestionUsuarios`, `GestionVentas`, `HistorialProducto`. Reusa `useSesion` (misma sesión global que el sitio público, fiel al comportamiento del vanilla) y agrega `composables/useCategorias.js` (compartido entre catálogo y categorías). Verificado en navegador real: catálogo, categorías con atributos, usuarios con roles, e historial con reconstrucción point-in-time funcionando sobre datos reales.
 
-**Corrección de alcance vs. README (confirmada intencional por el usuario, 2026-09-06)**: el `README.md` decía que solo `administrador` puede entrar al panel, pero el código real de `admin.js` también permite `vendedor`, con acceso recortado a solo su propio catálogo y "Mis ventas" (sin Categorías/Usuarios). El usuario confirmó que este es el comportamiento deseado: el vendedor tiene "acceso de admin" pero acotado únicamente a sus propios datos. Se migró tal cual; pendiente actualizar la nota del `README.md` que dice lo contrario.
+**Corrección de alcance vs. README (confirmada intencional por el usuario, 2026-09-06)**: el `README.md` decía que solo `administrador` puede entrar al panel, pero el código real de `admin.js` también permite `vendedor`, con acceso recortado a solo su propio catálogo y "Mis ventas" (sin Categorías/Usuarios). El usuario confirmó que este es el comportamiento deseado: el vendedor tiene "acceso de admin" pero acotado únicamente a sus propios datos. Se migró tal cual, y el `README.md` ya describe este comportamiento.
 
 **Nota de estilo (actualizado 2026-09-07)**: todo el panel admin (`GestionUsuarios`, `GestionProductos`/`FormularioProducto`, `GestionCategorias`/`FormularioCategoria`, `SidebarAdmin`, `LoginAdmin`) fue migrado de la paleta indigo/slate original de `admin.html` a la paleta `accent`/neutral del sitio público, a pedido del usuario. `GestionVentas` e `HistorialProducto` (fuera de su formulario, que sí ya estaba en `accent`) no se tocaron por no haberse pedido explícitamente. Verificado en navegador real en Catálogo, Categorías y Usuarios: sin errores de consola, funcionalidad intacta.
 
@@ -89,10 +95,11 @@ frontend/app/
     main.js               # createApp(App).use(router).mount
     App.vue                # solo <RouterView />
     style.css               # @import "tailwindcss"; + @theme (accent, Inter)
-    router/index.js          # rutas "/" y "/admin"
+    router/index.js          # rutas "/", "/producto/:id" y "/admin/:tab?"
     views/
       VistaPublica.vue        # sitio público real (catálogo, carrito, checkout, login/registro)
-      VistaAdmin.vue           # panel admin real (catálogo, categorías, usuarios, ventas, historial)
+      VistaDetalleProducto.vue # página de producto (especificaciones, reseñas, oferta límite)
+      VistaAdmin.vue           # panel admin real (catálogo, categorías, usuarios, ventas, historial, fraude)
     components/publico/, components/admin/, composables/, services/, utils/
   vite.config.js           # plugins: vue(), tailwindcss(); puerto 5173
   README.md                # cómo levantar dev/build
@@ -235,3 +242,43 @@ frontend/app/
   en `datos_semilla_usuarios.sql` (mismo criterio de `ON CONFLICT`/lookup
   dinámico, sin IDs fijos). Verificado contra la base real: los 11
   compradores tienen dirección propia.
+- 2026-09-22: se fusiona `main` (Entrega 2) en `dev` (atributos personalizados
+  por producto) y, tras revisar el proyecto contra el enunciado oficial, se
+  corrigen los huecos de mayor peso en la rúbrica de la Entrega 2:
+  (1) la oferta de inventario limitado ahora tiene **ventana de tiempo**:
+  `POST /api/ofertas` exige `duracion_minutos` (1 a 10 080) y las claves
+  `oferta:{id}:stock`/`:limite` se crean con ese TTL, así que la oferta
+  vence sola; `GET` devuelve `segundos_restantes` y `fecha_fin`, y la
+  página del producto muestra una cuenta regresiva. (2) Solo el vendedor
+  dueño del producto o un administrador pueden crear o cerrar su oferta.
+  (3) El checkout toma los productos del **carrito guardado en Redis** en
+  vez de los que envía el navegador, responde `409 CARRITO_VACIO` si el
+  carrito expiró y borra el carrito tras confirmar el pago; el frontend
+  recarga el carrito al abrirlo. `prueba_concurrencia_oferta.py` pasa a
+  usar un producto real (PROD-0001), ya que ahora se valida que exista.
+  Verificado end-to-end contra el servidor real: compra real (pedido 11,
+  la lista de productos falsa enviada por el cliente se ignoró), checkout
+  con carrito expirado rechazado sin crear pedido, expiración de la
+  oferta, 403 para vendedor ajeno y prueba de concurrencia en PASS
+  (10 éxitos, 40 rechazos, stock final 0). Se agregan
+  `docs/decisiones/ADR-003-redis-carrito-y-oferta.md` y
+  `docs/informe-entrega-2.md` (borrador), y se pone al día la
+  documentación desactualizada (README, este documento, `arquitectura.md`
+  y el README del frontend).
+- 2026-09-22 (tarde): a partir de pruebas del usuario en el navegador:
+  (1) la **referencia de pago pasa a generarla el backend**
+  (`TY-AAAAMMDDHHMMSS-XXXXXX`, hora de Guatemala + 6 hex); el campo se
+  quita del formulario de checkout, `POST /api/checkout` ignora
+  `referencia_pago` si llega y la devuelve en la respuesta 201.
+  (2) Se diagnostica que "el carrito no se vacía tras comprar" no era un
+  bug del código sino del servidor de desarrollo: con el repo dentro de
+  OneDrive, el watcher de Vite perdió eventos de cambio y el navegador
+  terminó con **dos instancias de `useCarrito.js`** (distinto `?t=`); el
+  checkout vaciaba una y la pantalla mostraba la otra. Se reinicia Vite y
+  se activa `server.watch.usePolling` (300 ms) en `vite.config.js`.
+  (3) Para que las reseñas no queden escondidas al final de la página: al
+  confirmar la compra se muestra un resumen (pedido, referencia y un botón
+  "Dejar reseña" por producto que abre `/producto/:id#escribir-resena`), y
+  la página del producto tiene un enlace "★ Escribir reseña" bajo el
+  precio; el router hace scroll al ancla esperando a que el producto
+  termine de cargar. Verificado en el navegador real (pedido 15).

@@ -10,6 +10,12 @@ límite 10, simulando 50 compradores distintos, y verifica que Redis (vía el
 script Lua atómico) haya evitado la sobreventa: exactamente 10 éxitos, 40
 rechazos, stock final en 0.
 
+Usa un producto REAL del catálogo de Mongo (por defecto PROD-0001), porque
+POST/DELETE /api/ofertas validan que el producto exista y que el solicitante
+sea su dueño o un administrador. Se opera como administrador (id 1). Si ya hay
+una oferta activa en ese producto, el script aborta sin tocarla (para no
+pisar una oferta real); cambia PRODUCTO_ID o finalízala a mano.
+
 Uso:
     python backend/scripts/prueba_concurrencia_oferta.py
 """
@@ -19,22 +25,42 @@ import concurrent.futures
 import requests
 
 BASE_URL = "http://127.0.0.1:8000"
-PRODUCTO_ID = "PROD-TEST-CONCURRENCIA"
+PRODUCTO_ID = "PROD-0001"
+ROL_ADMIN = "administrador"
+ID_USUARIO_ADMIN = 1
 LIMITE_OFERTA = 10
+DURACION_MINUTOS = 5
 TOTAL_REQUESTS = 50
 MAX_WORKERS = 20
 
 
 def limpiar_oferta():
     try:
-        requests.delete(
+        resp = requests.delete(
             f"{BASE_URL}/api/ofertas/{PRODUCTO_ID}",
-            params={"rol_solicitante": "administrador"},
+            params={"rol_solicitante": ROL_ADMIN, "id_usuario": ID_USUARIO_ADMIN},
             timeout=5,
         )
-    except requests.RequestException:
-        # No importa si falla (p.ej. no existía la oferta): es solo limpieza.
-        pass
+        if resp.status_code != 200:
+            print(f"       ADVERTENCIA: no se pudo finalizar la oferta "
+                  f"({resp.status_code} {resp.text})")
+    except requests.RequestException as e:
+        print(f"       ADVERTENCIA: no se pudo finalizar la oferta: {e}")
+
+
+def verificar_sin_oferta_activa():
+    # No se "limpia" una oferta previa a ciegas: PRODUCTO_ID es un producto
+    # real y podría tener una oferta legítima creada por su vendedor.
+    resp = requests.get(f"{BASE_URL}/api/ofertas/{PRODUCTO_ID}", timeout=5)
+    if resp.status_code == 200:
+        raise SystemExit(
+            f"ABORTADO: ya hay una oferta activa en {PRODUCTO_ID} ({resp.json()}). "
+            f"No se toca para no pisar una oferta real. Finalízala o cambia "
+            f"PRODUCTO_ID en este script."
+        )
+    if resp.status_code != 404:
+        raise SystemExit(f"ABORTADO: respuesta inesperada al consultar la oferta: "
+                         f"{resp.status_code} {resp.text}")
 
 
 def crear_oferta():
@@ -43,7 +69,9 @@ def crear_oferta():
         json={
             "producto_id": PRODUCTO_ID,
             "cantidad_limite": LIMITE_OFERTA,
-            "rol_solicitante": "administrador",
+            "duracion_minutos": DURACION_MINUTOS,
+            "rol_solicitante": ROL_ADMIN,
+            "id_usuario": ID_USUARIO_ADMIN,
         },
         timeout=5,
     )
@@ -69,10 +97,11 @@ def main():
     print("PRUEBA DE CONCURRENCIA - OFERTA DE INVENTARIO LIMITADO (FLASH SALE)")
     print("=" * 70)
 
-    print(f"\n[1/5] Limpiando oferta previa de {PRODUCTO_ID} (si existía)...")
-    limpiar_oferta()
+    print(f"\n[1/5] Verificando que {PRODUCTO_ID} no tenga una oferta activa...")
+    verificar_sin_oferta_activa()
 
-    print(f"[2/5] Creando oferta nueva con límite {LIMITE_OFERTA}...")
+    print(f"[2/5] Creando oferta nueva con límite {LIMITE_OFERTA} "
+          f"y duración {DURACION_MINUTOS} min...")
     crear_oferta()
 
     print(f"[3/5] Disparando {TOTAL_REQUESTS} requests concurrentes "
