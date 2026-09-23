@@ -7,6 +7,7 @@ from .blueprints.auth import bp as auth_bp
 from .blueprints.carrito import bp as carrito_bp
 from .blueprints.catalogo import bp as catalogo_bp
 from .blueprints.checkout import bp as checkout_bp
+from .blueprints.direcciones import bp as direcciones_bp
 from .blueprints.fraude import bp as fraude_bp
 from .blueprints.historial import bp as historial_bp
 from .blueprints.ofertas import bp as ofertas_bp
@@ -25,6 +26,7 @@ def create_app():
     app.register_blueprint(auth_bp)
     app.register_blueprint(carrito_bp)
     app.register_blueprint(checkout_bp)
+    app.register_blueprint(direcciones_bp)
     app.register_blueprint(catalogo_bp)
     app.register_blueprint(fraude_bp)
     app.register_blueprint(historial_bp)

@@ -33,6 +33,23 @@ class Usuario(db.Model):
     fecha_registro = db.Column(db.DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"))
 
 
+class Direccion(db.Model):
+    __tablename__ = "direcciones"
+
+    id_direccion = db.Column(db.Integer, primary_key=True)
+    id_usuario = db.Column(
+        db.Integer, db.ForeignKey("usuarios.id_usuario", ondelete="CASCADE"), nullable=False
+    )
+    direccion_linea1 = db.Column(db.String(255), nullable=False)
+    direccion_linea2 = db.Column(db.String(255))
+    ciudad = db.Column(db.String(100), nullable=False)
+    departamento_estado = db.Column(db.String(100), nullable=False)
+    codigo_postal = db.Column(db.String(20), nullable=False)
+    # server_default replica los DEFAULT del DDL para que SQLAlchemy no mande NULL.
+    pais = db.Column(db.String(100), nullable=False, server_default=text("'Guatemala'"))
+    es_principal = db.Column(db.Boolean, nullable=False, server_default=text("false"))
+
+
 class Categoria(db.Model):
     __tablename__ = "categorias"
 
