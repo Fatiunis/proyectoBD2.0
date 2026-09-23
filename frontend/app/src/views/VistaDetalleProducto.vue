@@ -126,7 +126,7 @@ function onBuscar(texto) {
             >{{ producto.stock_disponible ? "Agregar al carrito" : "Sin stock" }}</button>
           </div>
 
-          <OfertaLimitada :producto-id="producto._id" :id-vendedor="producto.vendedor?.id_vendedor" />
+          <OfertaLimitada :producto-id="producto._id" :id-vendedor="producto.vendedor?.id_vendedor" :precio-base="producto.precio_base" />
         </div>
       </div>
 

@@ -107,12 +107,16 @@ async function confirmarCompra() {
 
   if (ok) {
     toast(`Compra confirmada · Pedido #${data.id_pedido} · Referencia ${data.referencia_pago}`, "success");
-    const productos = items.value.map(({ idProducto, nombre, imagenUrl, cantidad, idCategoria }) => ({
-      idProducto, nombre, imagenUrl, cantidad, idCategoria,
-    }));
+    // Una línea normal y una de oferta del mismo producto se agrupan: la reseña es por producto.
+    const porProducto = new Map();
+    for (const { idProducto, nombre, imagenUrl, cantidad, idCategoria } of items.value) {
+      const previo = porProducto.get(idProducto);
+      if (previo) previo.cantidad += cantidad;
+      else porProducto.set(idProducto, { idProducto, nombre, imagenUrl, cantidad, idCategoria });
+    }
     limpiarLocal();
-    emit("confirmado", { idPedido: data.id_pedido, referencia: data.referencia_pago, productos });
-  } else if (data?.codigo === "CARRITO_VACIO") {
+    emit("confirmado", { idPedido: data.id_pedido, referencia: data.referencia_pago, productos: [...porProducto.values()] });
+  } else if (data?.codigo === "CARRITO_VACIO" || data?.codigo === "RESERVA_OFERTA_EXPIRADA") {
     toast(data.error, "error");
     await cargarCarrito();
   } else {

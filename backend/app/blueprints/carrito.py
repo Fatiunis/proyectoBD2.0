@@ -3,6 +3,7 @@ import json
 import redis
 from flask import Blueprint, request, jsonify
 
+from .. import ofertas_redis
 from ..config import CARRITO_TTL_SEGUNDOS
 from ..extensions import redis_client
 
@@ -22,6 +23,17 @@ bp = Blueprint("carrito", __name__)
 # resto del proyecto, que no valida conexión- acá sí se captura
 # redis.exceptions.RedisError aparte para responder un 500 claro en vez de
 # dejar que la excepción reviente sin manejar.
+#
+# Líneas de oferta relámpago: POST /api/ofertas/<pid>/reservar agrega una
+# línea aparte con el campo "oferta:{pid}" (una línea normal del mismo
+# producto usa el campo "{pid}"; ambas pueden convivir). Esa línea depende de
+# una reserva en oferta:{pid}:reservas que dura RESERVA_OFERTA_TTL_SEGUNDOS:
+#   - GET: si la reserva venció, la línea se quita (atómicamente, en Lua) y su
+#     nombre se informa en "ofertas_expiradas".
+#   - PUT: la cantidad de una línea de oferta no se puede cambiar (400).
+#   - DELETE de la línea o del carrito completo: libera la reserva en el acto.
+# Cada ítem de la respuesta trae precio_unitario (precio de oferta o
+# precio_base) para que el frontend sume con un solo campo.
 
 
 def _clave_carrito(id_usuario):
@@ -40,18 +52,41 @@ def get_carrito(id_usuario):
         redis_client.expire(clave, CARRITO_TTL_SEGUNDOS)
 
         items = []
-        for id_producto, valor_json in crudo.items():
+        ofertas_expiradas = []
+        for id_item, valor_json in crudo.items():
             item = json.loads(valor_json)
-            item["id_producto"] = id_producto
+            item["id_item"] = id_item
+            producto_oferta = ofertas_redis.producto_de_campo(id_item)
+
+            if producto_oferta is None:
+                item["id_producto"] = id_item
+                item["es_oferta"] = False
+                item["precio_unitario"] = item.get("precio_base")
+                items.append(item)
+                continue
+
+            # Línea de oferta: la reserva en Redis es la fuente de verdad de
+            # cantidad, precio y vencimiento. Si ya no existe, el script la
+            # quita del carrito en la misma operación.
+            reserva = ofertas_redis.estado_linea(producto_oferta, id_usuario, clave)
+            if reserva is None:
+                ofertas_expiradas.append(item.get("nombre") or producto_oferta)
+                continue
+            item["id_producto"] = producto_oferta
+            item["es_oferta"] = True
+            item["cantidad"] = reserva["cantidad"]
+            item["precio_unitario"] = reserva["precio_oferta"]
+            item["segundos_restantes"] = ofertas_redis.segundos_desde_ms(reserva["ms_restantes"])
             items.append(item)
 
         cantidad_total = sum(item["cantidad"] for item in items)
-        total_pagar = sum(item["cantidad"] * item["precio_base"] for item in items)
+        total_pagar = round(sum(item["cantidad"] * item["precio_unitario"] for item in items), 2)
 
         return jsonify({
             "items": items,
             "cantidad_total": cantidad_total,
             "total_pagar": total_pagar,
+            "ofertas_expiradas": ofertas_expiradas,
         })
     except redis.exceptions.RedisError as e:
         return jsonify({"error": f"No se pudo conectar a Redis: {str(e)}"}), 500
@@ -78,6 +113,8 @@ def agregar_item(id_usuario):
     id_producto = data.get("id_producto")
     if not isinstance(id_producto, str) or not id_producto.strip():
         return jsonify({"error": "id_producto debe ser un string no vacío"}), 400
+    if ofertas_redis.producto_de_campo(id_producto) is not None:
+        return jsonify({"error": "Las líneas de oferta se agregan con POST /api/ofertas/<producto_id>/reservar"}), 400
 
     cantidad = data.get("cantidad", 1)
     if not _es_entero_positivo(cantidad):
@@ -112,6 +149,9 @@ def agregar_item(id_usuario):
 
         item_respuesta = dict(item)
         item_respuesta["id_producto"] = id_producto
+        item_respuesta["id_item"] = id_producto
+        item_respuesta["es_oferta"] = False
+        item_respuesta["precio_unitario"] = item.get("precio_base")
         return jsonify({"mensaje": "Producto agregado al carrito", "item": item_respuesta}), 201
     except redis.exceptions.RedisError as e:
         return jsonify({"error": f"No se pudo conectar a Redis: {str(e)}"}), 500
@@ -126,6 +166,9 @@ def actualizar_item(id_usuario, id_producto):
     data = request.get_json(silent=True)
     if data is None:
         return jsonify({"error": "El cuerpo de la petición debe ser JSON válido"}), 400
+
+    if ofertas_redis.producto_de_campo(id_producto) is not None:
+        return jsonify({"error": "La cantidad de una oferta relámpago no se puede cambiar"}), 400
 
     cantidad = data.get("cantidad")
     if not _es_entero_positivo(cantidad):
@@ -146,6 +189,9 @@ def actualizar_item(id_usuario, id_producto):
 
         item_respuesta = dict(item)
         item_respuesta["id_producto"] = id_producto
+        item_respuesta["id_item"] = id_producto
+        item_respuesta["es_oferta"] = False
+        item_respuesta["precio_unitario"] = item.get("precio_base")
         return jsonify({"mensaje": "Cantidad actualizada", "item": item_respuesta}), 200
     except redis.exceptions.RedisError as e:
         return jsonify({"error": f"No se pudo conectar a Redis: {str(e)}"}), 500
@@ -157,7 +203,13 @@ def actualizar_item(id_usuario, id_producto):
 def eliminar_item(id_usuario, id_producto):
     clave = _clave_carrito(id_usuario)
     try:
-        redis_client.hdel(clave, id_producto)
+        producto_oferta = ofertas_redis.producto_de_campo(id_producto)
+        if producto_oferta is not None:
+            # Quita la línea y libera la reserva en una sola operación Lua:
+            # las unidades vuelven a estar disponibles en la oferta ya mismo.
+            ofertas_redis.liberar(producto_oferta, id_usuario, clave)
+        else:
+            redis_client.hdel(clave, id_producto)
         # Si el hash quedó vacío, Redis ya lo borró solo; EXPIRE sobre una key
         # inexistente simplemente no hace nada (no rompe nada).
         redis_client.expire(clave, CARRITO_TTL_SEGUNDOS)
@@ -172,6 +224,14 @@ def eliminar_item(id_usuario, id_producto):
 def vaciar_carrito(id_usuario):
     clave = _clave_carrito(id_usuario)
     try:
+        # Primero se liberan las reservas de las líneas de oferta (si no, sus
+        # unidades quedarían apartadas hasta que venza el minuto) y después se
+        # borra el carrito. Si Redis cae entre ambos pasos, lo que quede se
+        # arregla solo: las reservas vencen y el carrito expira por TTL.
+        for campo in redis_client.hkeys(clave):
+            producto_oferta = ofertas_redis.producto_de_campo(campo)
+            if producto_oferta is not None:
+                ofertas_redis.liberar(producto_oferta, id_usuario, clave)
         redis_client.delete(clave)
         return jsonify({"mensaje": "Carrito vaciado"}), 200
     except redis.exceptions.RedisError as e:

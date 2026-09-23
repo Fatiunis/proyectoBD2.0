@@ -22,8 +22,12 @@ Si ya tenías TiendaYa corriendo de una entrega anterior, esto es lo que se agre
 Qué se construyó, en concreto:
 - **Carrito de compra**: ya no vive en `localStorage`, vive en Redis (`carrito:{id_usuario}`, expira a los 30 min de inactividad). Requiere sesión iniciada. El checkout toma los productos de ese carrito en Redis (no de lo que envía el navegador), así que un carrito expirado ya no se puede pagar. La referencia de pago la genera el backend automáticamente (formato `TY-AAAAMMDDHHMMSS-XXXXXX`). Al confirmar la compra se muestra un resumen con el número de pedido, la referencia y un botón "Dejar reseña" por cada producto comprado.
 - **Oferta de inventario limitado** ("flash sale"): cupo independiente por producto en Redis, con una **duración** que se indica al crearla (la oferta vence sola al terminar esa ventana de tiempo), reservado con un script Lua atómico (sin sobreventa, verificado con 50 solicitudes concurrentes contra un límite de 10 → 10 éxitos, 0 sobreventa). Se crea y se cierra desde la página de detalle del producto; solo puede hacerlo el vendedor dueño del producto o un administrador.
+  - **Precio de oferta**: al crear la oferta se fija un `precio_oferta`, que debe ser menor que el precio normal. **No se puede editar**: para cambiarlo, hay que finalizar la oferta y crear otra. La página del producto muestra el precio de oferta, el normal tachado y el % de descuento.
+  - **Reserva de 1 minuto en el carrito**: "Reservar y agregar al carrito" aparta las unidades y agrega al carrito una línea aparte, marcada "Oferta relámpago", con el precio de oferta, la cantidad fija y una cuenta regresiva. Si no se compra en ese tiempo (`RESERVA_OFERTA_TTL_SEGUNDOS`, 60 por defecto), la línea sale del carrito y las unidades vuelven a la oferta. Quitar la línea o vaciar el carrito también las libera de inmediato. Cada comprador puede tener una sola reserva activa por oferta.
+  - **El cupo se descuenta al comprar, no al reservar**: el checkout confirma la reserva en Redis (Lua), cobra el precio de oferta y descuenta también el inventario real de PostgreSQL. Si la reserva ya venció, el checkout responde 409 (`RESERVA_OFERTA_EXPIRADA`) y quita la línea. Si PostgreSQL falla, las unidades vuelven a la oferta. Una línea normal y una de oferta del mismo producto pueden convivir en el carrito; el stock se valida sumando las dos.
+  - Requiere aplicar `database/postgres/migracion_sp_checkout_precio_oferta.sql` en las bases que ya existían (ver el paso 3 de Instalación).
 - **Reseñas de producto**: sistema nuevo desde cero — cualquier comprador puede calificar (1-5) y comentar un producto una sola vez, visible en `/producto/:id`. El formulario está al final de la página del producto; se llega directo con el enlace "★ Escribir reseña" bajo el precio, o con "Dejar reseña" desde el resumen de compra (URL `/producto/:id#escribir-resena`).
-- **Detección de fraude en reseñas**: cada reseña se sincroniza a un grafo en Neo4j; el panel admin (`/admin/fraude`, solo administrador) corre una consulta de varios saltos que señala cuentas que se recalifican entre sí sobre los mismos productos.
+- **Detección de fraude en reseñas**: cada reseña se sincroniza a un grafo en Neo4j; el panel admin (`/admin/fraude`, solo administrador) corre una consulta de varios saltos que señala cuentas que se recalifican entre sí sobre los mismos productos. Para provocar una alerta a propósito, revisarla en el panel y limpiar los datos después, sigue [`docs/guia-prueba-fraude.md`](docs/guia-prueba-fraude.md).
 - **Direcciones de envío en el checkout**: el checkout ya no pide escribir el ID de la dirección (antes había que adivinarlo y fallaba con "La dirección X no pertenece al comprador Y"). Ahora muestra un selector con las direcciones del comprador, con la principal ya elegida, y un mini formulario para agregar una si no tiene ninguna o quiere otra. Lo respalda un blueprint nuevo (`direcciones.py`: `GET`/`POST /api/usuarios/<id_usuario>/direcciones`); la primera dirección de un usuario queda como principal y marcar otra como principal desmarca la anterior.
 - **Imágenes en el formulario de producto del admin**: al crear o editar un producto se pueden agregar hasta 10 links de imagen (http/https), con vista previa, elección de portada y orden (↑/↓). Detalle en [Imágenes de los productos](#imágenes-de-los-productos).
 - **Documentación nueva**: [`docs/decisiones/ADR-002-grafos-vs-columnar.md`](docs/decisiones/ADR-002-grafos-vs-columnar.md) (por qué Neo4j y no Cassandra), [`docs/decisiones/ADR-003-redis-carrito-y-oferta.md`](docs/decisiones/ADR-003-redis-carrito-y-oferta.md) (por qué Redis para el carrito y la oferta), [`docs/arquitectura.md`](docs/arquitectura.md) (diagrama actualizado) y [`docs/informe-entrega-2.md`](docs/informe-entrega-2.md) (informe de la entrega).
@@ -44,7 +48,8 @@ Qué se construyó, en concreto:
 
 **Limitaciones conocidas:**
 - El checkout opera sobre `productos`/`inventario` de PostgreSQL, no sobre MongoDB — editar un producto desde el admin solo se refleja en Mongo, el checkout sigue usando precio/stock de Postgres. Los dos catálogos no se sincronizan automáticamente.
-- La oferta de inventario limitado vive enteramente en Redis, independiente del inventario real de Postgres — es un cupo aparte para la mecánica de flash sale, no descuenta stock del catálogo.
+- La oferta de inventario limitado (cupo, precio y reservas) vive en Redis. Es un cupo aparte del inventario real, pero al confirmar la compra las unidades vendidas en oferta **sí** se descuentan del `inventario` de PostgreSQL, igual que una compra normal.
+- El precio de oferta se valida al crearla contra el `precio_base` de MongoDB, y en el checkout contra el de PostgreSQL. Si un producto se editó solo en Mongo y los dos precios no coinciden, una oferta que se creó sin problema puede fallar al pagar. En ese caso el checkout devuelve las unidades a la oferta.
 - La sincronización de una reseña hacia Neo4j es de mejor esfuerzo (sin 2PC): si Neo4j no está disponible al crear la reseña, esta igual queda guardada en Mongo y solo se registra una advertencia en el log del backend.
 - El historial de cambios del producto no registra el stock: cada evento guarda nombre, descripción, precio, estado activo/inactivo y atributos. La reconstrucción por fecha indica si el producto estaba disponible para la venta (activo), pero no cuántas unidades había en existencia en ese momento.
 
@@ -92,6 +97,8 @@ MONGO_DB_NAME=tiendaya_nosql
 
 REDIS_URL=redis://localhost:6379/0
 CARRITO_TTL_SEGUNDOS=1800
+# Segundos que una reserva de oferta relámpago queda apartada en el carrito (opcional, 60 por defecto)
+RESERVA_OFERTA_TTL_SEGUNDOS=60
 
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
@@ -112,6 +119,12 @@ Carga el esquema, el procedimiento de checkout y los primeros 4 productos:
 
 ```bash
 psql -U postgres -d tiendaya_db -f database/postgres/ddl_tiendaya.sql
+```
+
+**Si tu base `tiendaya_db` ya existía de antes**, no vuelvas a correr el DDL (borra todo); corre en su lugar la migración que actualiza `sp_procesar_checkout` para aceptar el precio de oferta relámpago por línea y validar el stock sumando las líneas del mismo producto (solo reemplaza el procedimiento, no toca datos):
+
+```bash
+psql -U postgres -d tiendaya_db -f database/postgres/migracion_sp_checkout_precio_oferta.sql
 ```
 
 Carga los 11 productos adicionales de la semilla (15 en total):
@@ -299,8 +312,16 @@ backend/
     config.py                    load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, NEO4J_URI...
     extensions.py                 db (SQLAlchemy), Mongo (col_productos, col_historial, col_resenas), redis_client, neo4j_driver
     models.py                      Modelos SQLAlchemy: Usuario, Direccion, Categoria, Producto, Inventario, Pedido, LineaPedido
+    ofertas_redis.py              Keys, carga de scripts Lua y wrappers de la oferta (compartido por ofertas, carrito y checkout)
     lua/
-      reservar_oferta.lua           Check-and-decrement atómico para la oferta de inventario limitado
+      crear_oferta.lua               Crea cupo, límite, precio e id de la oferta en un solo paso (mismo TTL)
+      consultar_oferta.lua            Estado de la oferta: disponible, reservado, vendido y la reserva del usuario
+      reservar_oferta.lua             Aparta unidades por RESERVA_OFERTA_TTL_SEGUNDOS sin sobreventa (no descuenta el cupo)
+      estado_linea_oferta.lua          Valida la reserva de una línea de oferta del carrito
+      liberar_reserva_oferta.lua        Libera una reserva (quitar la línea o vaciar el carrito)
+      consumir_reserva_oferta.lua       Checkout: pasa la reserva a "en pago" y descuenta el cupo
+      compensar_reserva_oferta.lua      Checkout fallido: devuelve las unidades y restaura la reserva
+      confirmar_reserva_oferta.lua      Checkout confirmado: cierra la reserva como vendida
     blueprints/
       auth.py                       /api/auth/register, /api/auth/login, /api/usuarios, /api/usuarios/<id>
       direcciones.py                 /api/usuarios/<id_usuario>/direcciones (GET lista, POST alta; las usa el checkout)
@@ -309,7 +330,7 @@ backend/
       historial.py                     /api/historial, /api/historial/<producto_id>
       vendedores.py                     /api/vendedores/<id>/ventas
       carrito.py                        /api/carrito/<id_usuario> (Redis, Entrega 2)
-      ofertas.py                        /api/ofertas, /api/ofertas/<producto_id>/reservar (Redis + Lua, Entrega 2)
+      ofertas.py                        /api/ofertas, /api/ofertas/<producto_id>, /api/ofertas/<producto_id>/reservar (precio de oferta + reserva de 1 min; Redis + Lua, Entrega 2)
       resenas.py                        /api/resenas (Mongo + sync a Neo4j, Entrega 2)
       fraude.py                         /api/fraude/alertas (consulta Cypher de 3 saltos, Entrega 2)
   scripts/
@@ -320,6 +341,7 @@ database/
     datos_semilla_productos.sql    11 productos adicionales (15 en total)
     datos_semilla_usuarios.sql     10 compradores + direcciones adicionales (Entrega 2, IDs dinámicos vía ON CONFLICT)
     datos_semilla_masivos.sql      Semilla masiva: 19 subcategorías + 40 tiendas + 1000 productos e inventario (generado, idempotente)
+    migracion_sp_checkout_precio_oferta.sql  Actualiza sp_procesar_checkout en bases existentes (precio de oferta por línea)
   mongo/
     01_indexes.js                  Índices de referencia (ya se crean también desde la migración)
     02_aggregation_queries.js      Consultas de agregación de referencia
@@ -345,6 +367,7 @@ docs/
     ADR-002-grafos-vs-columnar.md   Registro de decisión: Neo4j para fraude en reseñas, columnar descartado por ahora
     ADR-003-redis-carrito-y-oferta.md  Registro de decisión: Redis para el carrito y la oferta de inventario limitado
   informe-entrega-2.md       Informe de la Entrega 2 (decisiones, evidencia y responsabilidades)
+  guia-prueba-fraude.md      Paso a paso para provocar y revisar una alerta de fraude, y limpiar los datos de prueba
 docker-compose.yml          Redis + Neo4j (Entrega 2)
 requirements.txt
 .env.example
