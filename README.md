@@ -136,6 +136,15 @@ python database/migrations/migracion_postgres_a_mongo.py
 
 Esto crea `productos` y `historial_cambios_productos` en Mongo, con los eventos iniciales de creación, fotos reales por producto (Unsplash, mapeadas por SKU en el propio script) y los índices (`idx_categoria_activo_precio`, `idx_sku_unico`, `idx_historial_producto_fecha`, `idx_texto_busqueda`). **Si ya tenías el catálogo migrado de antes, vuelve a correr este script** para que tu Mongo local quede igual al del resto del equipo.
 
+#### Imágenes de los productos
+
+Las imágenes no son archivos del repositorio: cada producto guarda en Mongo dos enlaces a fotos de Unsplash (portada y detalle). **La fuente compartida por todo el equipo es el mapa `IMAGENES_POR_SKU` de `database/migrations/migracion_postgres_a_mongo.py`**: al correr la migración, todos obtienen las mismas imágenes.
+
+- **Para cambiar o agregar la imagen de un producto**, edita `IMAGENES_POR_SKU` (`"SKU": ("photo-<id portada>", "photo-<id detalle>")`, con el id que aparece en la URL de Unsplash), vuelve a correr la migración y haz commit del script. Un cambio hecho solo en tu Mongo local no les llega a los demás.
+- **Un producto nuevo de la semilla** necesita su entrada en el mapa; si no la tiene, recibe una foto genérica de su categoría (`IMAGEN_GENERICA_POR_CATEGORIA`).
+- **Los productos creados desde el panel admin** no llevan imágenes (el formulario no permite cargarlas); el sitio muestra el ícono de su categoría.
+- Ojo: la migración **borra y recrea** `productos` e `historial_cambios_productos`, así que se pierden las ediciones hechas desde el admin y el historial local.
+
 ### 5. Levantar Redis y Neo4j, y sembrar los datos de la Entrega 2
 
 Desde la raíz del repo:
