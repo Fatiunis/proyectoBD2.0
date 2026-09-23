@@ -19,6 +19,9 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CARRITO_TTL_SEGUNDOS = int(os.getenv("CARRITO_TTL_SEGUNDOS", "1800"))
+# Cuánto dura apartada en el carrito una reserva de oferta relámpago antes de
+# liberarse sola si no se completa la compra.
+RESERVA_OFERTA_TTL_SEGUNDOS = int(os.getenv("RESERVA_OFERTA_TTL_SEGUNDOS", "60"))
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "tiendaya123")

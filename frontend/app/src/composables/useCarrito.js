@@ -9,16 +9,26 @@ const { toast } = useToast();
 const items = ref([]);
 
 function itemDesdeApi(item) {
+  const esOferta = Boolean(item.es_oferta);
   return {
+    idItem: item.id_item ?? item.id_producto,
     idProducto: item.id_producto,
+    esOferta,
     idSqlOrigen: item.id_sql_origen,
     nombre: item.nombre,
     precioBase: item.precio_base,
+    precioUnitario: item.precio_unitario ?? item.precio_base,
     idCategoria: item.id_categoria,
     imagenUrl: item.imagen_url,
     stockDisponible: item.stock_disponible,
     cantidad: item.cantidad,
+    // Se usa segundos_restantes (no expira_en) para no depender de que el reloj del cliente coincida con el del servidor.
+    expiraMs: esOferta ? Date.now() + (item.segundos_restantes || 0) * 1000 : null,
   };
+}
+
+function rutaItem(idItem) {
+  return `/carrito/${sesion.value.id_usuario}/items/${encodeURIComponent(idItem)}`;
 }
 
 function avisarError(data) {
@@ -30,6 +40,9 @@ async function cargarCarrito() {
   const { ok, data } = await apiFetch(`/carrito/${sesion.value.id_usuario}`);
   if (ok) {
     items.value = (data.items || []).map(itemDesdeApi);
+    (data.ofertas_expiradas || []).forEach((nombre) =>
+      toast(`Tu reserva de ${nombre} expiró y se liberó`, "error")
+    );
   } else {
     avisarError(data);
   }
@@ -57,20 +70,24 @@ async function agregar(producto, cantidad = 1) {
   const imagenes = producto.imagenes || [];
   const portada = imagenes.find((img) => img.es_portada) || imagenes[0];
   const imagenUrl = portada?.url || null;
-  const existente = items.value.find((i) => i.idProducto === producto._id);
+  const existente = items.value.find((i) => !i.esOferta && i.idProducto === producto._id);
 
   if (existente) {
     existente.cantidad = Math.min(existente.cantidad + cantidad, stock);
   } else {
     items.value.push({
+      idItem: producto._id,
       idProducto: producto._id,
+      esOferta: false,
       idSqlOrigen: producto.id_sql_origen,
       nombre: producto.nombre,
       precioBase: producto.precio_base,
+      precioUnitario: producto.precio_base,
       idCategoria: producto.categoria?.id_categoria,
       imagenUrl,
       stockDisponible: stock,
       cantidad: Math.min(Math.max(cantidad, 1), stock),
+      expiraMs: null,
     });
   }
 
@@ -92,27 +109,25 @@ async function agregar(producto, cantidad = 1) {
   if (!ok) avisarError(data);
 }
 
-async function actualizarCantidad(idProducto, cantidad) {
-  const item = items.value.find((i) => i.idProducto === idProducto);
-  if (!item) return;
+async function actualizarCantidad(idItem, cantidad) {
+  const item = items.value.find((i) => i.idItem === idItem);
+  if (!item || item.esOferta) return;
   const tope = item.stockDisponible ?? cantidad;
   item.cantidad = Math.max(1, Math.min(cantidad, tope));
 
   if (!sesion.value) return;
-  const { ok, data } = await apiFetch(`/carrito/${sesion.value.id_usuario}/items/${idProducto}`, {
+  const { ok, data } = await apiFetch(rutaItem(idItem), {
     method: "PUT",
     body: JSON.stringify({ cantidad }),
   });
   if (!ok) avisarError(data);
 }
 
-async function quitar(idProducto) {
-  items.value = items.value.filter((i) => i.idProducto !== idProducto);
+async function quitar(idItem) {
+  items.value = items.value.filter((i) => i.idItem !== idItem);
 
   if (!sesion.value) return;
-  const { ok, data } = await apiFetch(`/carrito/${sesion.value.id_usuario}/items/${idProducto}`, {
-    method: "DELETE",
-  });
+  const { ok, data } = await apiFetch(rutaItem(idItem), { method: "DELETE" });
   if (!ok) avisarError(data);
 }
 
@@ -131,7 +146,7 @@ function limpiarLocal() {
 }
 
 const cantidadTotal = computed(() => items.value.reduce((acc, i) => acc + i.cantidad, 0));
-const totalPagar = computed(() => items.value.reduce((acc, i) => acc + i.cantidad * i.precioBase, 0));
+const totalPagar = computed(() => items.value.reduce((acc, i) => acc + i.cantidad * i.precioUnitario, 0));
 
 export function useCarrito() {
   return { items, cargarCarrito, agregar, actualizarCantidad, quitar, vaciar, limpiarLocal, cantidadTotal, totalPagar };
