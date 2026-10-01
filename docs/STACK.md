@@ -27,15 +27,17 @@ backend/
   main.py                  # entry point: from app import create_app; app.run(...)
   app/
     __init__.py              # create_app(): Flask + CORS + registro de blueprints
-    config.py                 # load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, CARRITO_TTL_SEGUNDOS, NEO4J_*
+    config.py                 # load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, CARRITO_TTL_SEGUNDOS, RESERVA_OFERTA_TTL_SEGUNDOS, NEO4J_*
     extensions.py              # db (SQLAlchemy), Mongo (col_productos, col_historial, col_resenas), redis_client, neo4j_driver
     models.py                   # Usuario, Direccion, Categoria, Producto, Inventario, Pedido, LineaPedido
-    lua/reservar_oferta.lua      # check-and-decrement atómico de la oferta (Entrega 2)
+    ofertas_redis.py             # keys, carga perezosa de los scripts Lua y wrappers de la oferta (compartido por ofertas, carrito y checkout)
+    lua/                         # crear/consultar/reservar/liberar oferta, estado_linea, consumir/compensar/confirmar reserva (Entrega 2)
     blueprints/
-      auth.py                  # /api/auth/register, /api/auth/login, /api/usuarios, /api/usuarios/<id>
-      checkout.py               # /api/checkout (toma los productos del carrito en Redis)
-      direcciones.py            # /api/usuarios/<id_usuario>/direcciones (GET lista, POST alta; selector del checkout)
-      catalogo.py                # /api/categorias, /api/categorias/<id>/filtros, /api/productos, /api/productos/<id>
+      auth.py                  # /api/auth/register, /api/auth/login, /api/usuarios, /api/usuarios/<id>, PUT /api/usuarios/<id>/perfil
+      checkout.py               # /api/checkout (carrito de Redis + reservas de oferta; copia el stock final a Mongo)
+      compradores.py            # /api/compradores/<id_comprador>/pedidos ("Mi cuenta": pedidos + total gastado)
+      direcciones.py            # /api/usuarios/<id_usuario>/direcciones (GET, POST; máx. 3) y .../<id_direccion> (PUT, DELETE)
+      catalogo.py                # /api/categorias, /api/categorias/<id>/filtros, /api/productos (paginado), /api/productos/<id>
       historial.py                # /api/historial (feed con filtros), /api/historial/<producto_id> (reconstrucción por fecha)
       vendedores.py                # /api/vendedores/<id>/ventas
       carrito.py                   # /api/carrito/<id_usuario> (Redis, Entrega 2)
@@ -112,7 +114,7 @@ frontend/app/
 |---|---|---|
 | PostgreSQL | Sin cambios de motor | Sigue siendo la fuente transaccional (usuarios, pedidos, checkout vía stored procedure). |
 | MongoDB | Sin cambios de motor | Sigue siendo el catálogo de productos + historial (event sourcing); Entrega 2 le agrega la colección `resenas`. |
-| Redis | ✅ Nuevo (Entrega 2) | Carrito de compra (`carrito:{id_usuario}`, TTL 30 min) y oferta de inventario limitado (`oferta:{producto_id}:stock`, decremento atómico vía script Lua). Ninguno de los dos es fuente de verdad del inventario real — ver limitación conocida en `README.md`. |
+| Redis | ✅ Nuevo (Entrega 2) | Carrito de compra (`carrito:{id_usuario}`, TTL 30 min) y oferta de inventario limitado (`oferta:{producto_id}:stock`/`:limite`/`:precio`/`:id` con el TTL de la oferta, más el hash `:reservas`; reservas de 1 min y consumo en el checkout, todo con scripts Lua atómicos). Ninguno de los dos es fuente de verdad del inventario real — ver `docs/decisiones/ADR-003-redis-carrito-y-oferta.md`. |
 | Neo4j | ✅ Nuevo (Entrega 2) | Grafo `(:Cuenta)-[:CALIFICO]->(:Producto)` para detección de fraude en reseñas. Ver `docs/decisiones/ADR-002-grafos-vs-columnar.md` para la justificación frente a la alternativa columnar (descartada por ahora). |
 | Migraciones | Script custom (`database/migrations/migracion_postgres_a_mongo.py`, `sembrar_resenas_fraude.py`) | No se introduce una herramienta de migraciones (Alembic, etc.) en esta fase; se evaluará si SQLAlchemy lo justifica más adelante. |
 
@@ -308,3 +310,51 @@ frontend/app/
   envía la lista completa. Estas imágenes viven solo en Mongo: la
   migración completa las borra y `--incremental` las conserva (ver
   `README.md`).
+- 2026-09-23: **oferta relámpago con precio y reserva temporal** (commit
+  "cambio para las ofertas relámpago"). La oferta tiene un `precio_oferta`
+  fijo (menor que el precio normal, no editable). "Reservar" ya no
+  descuenta el cupo: aparta las unidades por `RESERVA_OFERTA_TTL_SEGUNDOS`
+  (60 s) y agrega al carrito una línea `oferta:{pid}` con el precio de
+  oferta y una cuenta regresiva. El cupo se descuenta en el checkout, que
+  consume la reserva (`en_pago`), cobra el precio de oferta, descuenta el
+  `inventario` de Postgres y confirma o compensa la reserva según el
+  resultado del procedimiento (`409 RESERVA_OFERTA_EXPIRADA` si venció).
+  La lógica de Redis se centraliza en `backend/app/ofertas_redis.py` y en
+  ocho scripts Lua (`backend/app/lua/`), cargados la primera vez que se
+  usan, así que el backend ya arranca sin Redis. `sp_procesar_checkout`
+  acepta un precio por línea y valida el stock sumando las líneas del
+  mismo producto (`database/postgres/migracion_sp_checkout_precio_oferta.sql`
+  para bases existentes). Se agrega `docs/guia-prueba-fraude.md`.
+  Verificado de nuevo con `prueba_concurrencia_oferta.py` el mismo día:
+  50 reservas concurrentes contra un límite de 10 → 10 éxitos, 40 rechazos
+  (`409 Stock insuficiente en la oferta`), `stock_restante` 0,
+  `unidades_vendidas` 0, y el cupo vuelve a 10 al liberar las reservas.
+- 2026-09-23: **"Mi cuenta", paginación y sincronización de stock**
+  (commit "arreglar el stocke"). (1) Nuevo `PerfilComprador.vue` (botón
+  "Mi cuenta" en la navegación, solo para compradores) con tres
+  pestañas: pedidos con total gastado (nuevo blueprint `compradores.py`,
+  `GET /api/compradores/<id>/pedidos`; el total excluye los pedidos
+  cancelados), edición de perfil (`PUT /api/usuarios/<id>/perfil`:
+  nombre, teléfono y contraseña, que exige la actual y mínimo 8
+  caracteres) y direcciones (`PUT`/`DELETE
+  /api/usuarios/<id>/direcciones/<id_direccion>`, máximo 3 por usuario
+  con `409` al pasarse; al borrar la principal, la más antigua pasa a
+  serlo; una dirección usada en un pedido no se borra, `409`). Las
+  respuestas del registro y de la edición de perfil incluyen ahora
+  `telefono` (el login no). (2) **Paginación**: `GET
+  /api/productos` pasa de devolver una lista a devolver `{items, total,
+  pagina, por_pagina, total_paginas}` (24 por página por defecto, máximo
+  100); el catálogo público y el del admin usan el componente compartido
+  `components/comunes/Paginacion.vue`. Índice nuevo `idx_activo_precio`
+  (`{activo: 1, precio_base: 1}`) en `database/mongo/01_indexes.js` para la
+  vista "Todas las categorías"; la migración no lo crea, así que el README
+  indica cómo crearlo. (3) **Stock entre Postgres y Mongo** (mejor
+  esfuerzo): tras confirmar un pedido, el checkout copia a Mongo el stock
+  leído de Postgres después del commit (no lo resta en memoria, por los
+  checkouts concurrentes); editar el stock desde el admin actualiza también
+  `inventario` en Postgres. El precio sigue sin sincronizarse.
+  **Bug pendiente detectado al documentar:** `HistorialProducto.vue` (pestaña
+  Historial del admin) sigue tratando la respuesta de `GET /api/productos`
+  como lista (`[...data]`), así que falla con "data is not iterable" y no
+  carga el buscador de productos. Además, aunque se adapte a `data.items`,
+  solo recibiría la primera página (24 productos).

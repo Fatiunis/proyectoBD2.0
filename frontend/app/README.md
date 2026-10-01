@@ -21,7 +21,8 @@ archivos: sin esto Vite podía servir módulos viejos o dos copias distintas de 
 composable (por ejemplo `useCarrito`), partiendo su estado. Si aun así ves algo
 raro tras muchos cambios seguidos, reinicia `npm run dev` y recarga con Ctrl+F5.
 
-Rutas: `/` sitio público (catálogo, carrito, checkout, login/registro),
+Rutas: `/` sitio público (catálogo paginado, carrito, checkout, login/registro
+y "Mi cuenta" del comprador: pedidos, perfil y direcciones),
 `/producto/:id` página de producto (especificaciones, reseñas, oferta límite) y
 `/admin/:tab?` panel admin (catálogo, categorías, usuarios, ventas, historial,
 fraude).
@@ -43,3 +44,6 @@ Genera el build en `app/dist/`.
 - Sin Pinia — estado compartido con composables reactivos simples
   (`src/composables/`: `useSesion`, `useToast`, `useCategorias`, `useCarrito`;
   este último guarda el carrito en el backend, sobre Redis).
+- Componentes compartidos entre el sitio público y el admin en
+  `src/components/comunes/` (por ahora, `Paginacion.vue`). `GET /api/productos`
+  devuelve `{items, total, pagina, por_pagina, total_paginas}`, no una lista.

@@ -7,7 +7,7 @@ Portal de comercio electrónico con arquitectura de datos políglota (proyecto d
 - **Redis**: carrito de compra (expira por inactividad) y la oferta de inventario limitado (reserva atómica, sin sobreventa bajo concurrencia).
 - **Neo4j**: grafo de reseñas para detectar fraude (cuentas que se califican entre sí de forma reiterada sobre los mismos productos).
 - **Backend**: Flask con application factory (`backend/main.py` → `backend/app/create_app()`), organizado en **Blueprints** por dominio y **SQLAlchemy** para todo el acceso a PostgreSQL. Expone una API REST consumida por el frontend.
-- **Frontend**: **Vue 3 + Vite + Tailwind v4** (`frontend/app/`) — sitio público (catálogo, carrito, checkout, reseñas, oferta límite) y panel admin (catálogo, categorías, usuarios, ventas, historial, fraude).
+- **Frontend**: **Vue 3 + Vite + Tailwind v4** (`frontend/app/`) — sitio público (catálogo paginado, carrito, checkout, reseñas, oferta límite, "Mi cuenta" del comprador) y panel admin (catálogo, categorías, usuarios, ventas, historial, fraude).
 
 ## Novedades de la Entrega 2 (léelo si ya tenías el proyecto montado de antes)
 
@@ -30,6 +30,12 @@ Qué se construyó, en concreto:
 - **Detección de fraude en reseñas**: cada reseña se sincroniza a un grafo en Neo4j; el panel admin (`/admin/fraude`, solo administrador) corre una consulta de varios saltos que señala cuentas que se recalifican entre sí sobre los mismos productos. Para provocar una alerta a propósito, revisarla en el panel y limpiar los datos después, sigue [`docs/guia-prueba-fraude.md`](docs/guia-prueba-fraude.md).
 - **Direcciones de envío en el checkout**: el checkout ya no pide escribir el ID de la dirección (antes había que adivinarlo y fallaba con "La dirección X no pertenece al comprador Y"). Ahora muestra un selector con las direcciones del comprador, con la principal ya elegida, y un mini formulario para agregar una si no tiene ninguna o quiere otra. Lo respalda un blueprint nuevo (`direcciones.py`: `GET`/`POST /api/usuarios/<id_usuario>/direcciones`); la primera dirección de un usuario queda como principal y marcar otra como principal desmarca la anterior.
 - **Imágenes en el formulario de producto del admin**: al crear o editar un producto se pueden agregar hasta 10 links de imagen (http/https), con vista previa, elección de portada y orden (↑/↓). Detalle en [Imágenes de los productos](#imágenes-de-los-productos).
+- **"Mi cuenta" del comprador**: un comprador con sesión iniciada ve el botón "Mi cuenta" en la barra de navegación, con tres pestañas:
+  - **Mis pedidos**: total gastado (sin contar pedidos cancelados), número de pedidos y la lista de pedidos, del más reciente al más antiguo; cada uno se expande para ver sus líneas. Lo respalda un blueprint nuevo (`compradores.py`: `GET /api/compradores/<id_comprador>/pedidos`).
+  - **Editar perfil**: nombre, teléfono y cambio de contraseña. Para cambiarla hay que escribir la actual, y la nueva debe tener al menos 8 caracteres (`PUT /api/usuarios/<id_usuario>/perfil`).
+  - **Mis direcciones**: agregar, editar, marcar como principal y eliminar direcciones (`PUT`/`DELETE /api/usuarios/<id_usuario>/direcciones/<id_direccion>`). **Máximo 3 por usuario**: la cuarta responde `409`, también desde el checkout. Si eliminas la principal, la más antigua de las que quedan pasa a serlo. Una dirección que ya se usó en un pedido no se puede eliminar (`409`), porque el pedido la referencia.
+- **Catálogo paginado**: con más de 1000 productos, el catálogo público y la pestaña Catálogo del admin muestran 24 productos por página, con botones "Anterior"/"Siguiente". **Cambió el formato de `GET /api/productos`**: acepta `pagina` y `por_pagina` (24 por defecto, máximo 100) y ya no devuelve una lista, sino `{items, total, pagina, por_pagina, total_paginas}`. Hay un índice nuevo en Mongo (`idx_activo_precio`) para la vista "Todas las categorías": créalo con el comando del [paso 4](#4-migrar-el-catálogo-a-mongodb).
+- **Stock sincronizado entre PostgreSQL y MongoDB** (mejor esfuerzo): al confirmar una compra, el backend copia a Mongo el stock que quedó en Postgres, así la página del producto ya no muestra un stock viejo. Al editar el stock de un producto desde el admin, el cambio también se escribe en el `inventario` de Postgres, que es el que usa el checkout. Si alguna de las dos copias falla, la operación principal (el pedido o la edición en Mongo) igual queda hecha y solo se registra una advertencia en el log del backend.
 - **Documentación nueva**: [`docs/decisiones/ADR-002-grafos-vs-columnar.md`](docs/decisiones/ADR-002-grafos-vs-columnar.md) (por qué Neo4j y no Cassandra), [`docs/decisiones/ADR-003-redis-carrito-y-oferta.md`](docs/decisiones/ADR-003-redis-carrito-y-oferta.md) (por qué Redis para el carrito y la oferta), [`docs/arquitectura.md`](docs/arquitectura.md) (diagrama actualizado) y [`docs/informe-entrega-2.md`](docs/informe-entrega-2.md) (informe de la entrega).
 
 ## Estado del proyecto
@@ -47,7 +53,7 @@ Qué se construyó, en concreto:
 **Pendiente (documentación, no código):** explicar cómo `lineas_pedido` (PostgreSQL) referencia productos que ahora viven en MongoDB (vía el campo `id_sql_origen`).
 
 **Limitaciones conocidas:**
-- El checkout opera sobre `productos`/`inventario` de PostgreSQL, no sobre MongoDB — editar un producto desde el admin solo se refleja en Mongo, el checkout sigue usando precio/stock de Postgres. Los dos catálogos no se sincronizan automáticamente.
+- El checkout opera sobre `productos`/`inventario` de PostgreSQL, no sobre MongoDB. Del catálogo, solo el **stock** se sincroniza entre los dos motores, y es de mejor esfuerzo (ver "Stock sincronizado" arriba). El resto de lo que se edita desde el admin (**precio**, nombre, descripción, atributos) queda solo en Mongo: el checkout sigue cobrando el precio de Postgres.
 - La oferta de inventario limitado (cupo, precio y reservas) vive en Redis. Es un cupo aparte del inventario real, pero al confirmar la compra las unidades vendidas en oferta **sí** se descuentan del `inventario` de PostgreSQL, igual que una compra normal.
 - El precio de oferta se valida al crearla contra el `precio_base` de MongoDB, y en el checkout contra el de PostgreSQL. Si un producto se editó solo en Mongo y los dos precios no coinciden, una oferta que se creó sin problema puede fallar al pagar. En ese caso el checkout devuelve las unidades a la oferta.
 - La sincronización de una reseña hacia Neo4j es de mejor esfuerzo (sin 2PC): si Neo4j no está disponible al crear la reseña, esta igual queda guardada en Mongo y solo se registra una advertencia en el log del backend.
@@ -159,6 +165,14 @@ python database/migrations/migracion_postgres_a_mongo.py
 
 Esto crea `productos` y `historial_cambios_productos` en Mongo, con los eventos iniciales de creación, fotos reales por producto (Unsplash, mapeadas por SKU en el propio script) y los índices (`idx_categoria_activo_precio`, `idx_sku_unico`, `idx_historial_producto_fecha`, `idx_texto_busqueda`). **Si ya tenías el catálogo migrado de antes, vuelve a correr este script** para que tu Mongo local quede igual al del resto del equipo.
 
+La migración **no** crea el índice `idx_activo_precio`, que usa la paginación de la vista "Todas las categorías". Créalo aparte, **y vuelve a crearlo cada vez que corras la migración completa**, porque su `drop()` lo borra. Es seguro repetirlo:
+
+```bash
+python -c "from pymongo import MongoClient; import os; from dotenv import load_dotenv; load_dotenv(); c=MongoClient(os.getenv('MONGO_URI'))[os.getenv('MONGO_DB_NAME')]; print(c.productos.create_index([('activo', 1), ('precio_base', 1)], name='idx_activo_precio'))"
+```
+
+Sin este índice el catálogo funciona igual, pero Mongo tiene que recorrer y ordenar toda la colección en cada página.
+
 **Modo incremental (recomendado para cargar la semilla masiva en una base en uso):**
 
 ```bash
@@ -235,7 +249,7 @@ npm install
 npm run dev
 ```
 
-Vite queda escuchando en `http://localhost:5173` (o el siguiente puerto libre si ese ya está en uso) y habla con el backend en `http://127.0.0.1:8000`. Rutas: `/` sitio público (catálogo, carrito, checkout, login/registro), `/producto/:id` detalle de producto (reseñas y oferta de inventario limitado si el producto tiene una activa), `/admin` panel admin (catálogo, categorías, usuarios, ventas, historial, fraude — este último solo para administrador).
+Vite queda escuchando en `http://localhost:5173` (o el siguiente puerto libre si ese ya está en uso) y habla con el backend en `http://127.0.0.1:8000`. Rutas: `/` sitio público (catálogo paginado, carrito, checkout, login/registro y "Mi cuenta" del comprador), `/producto/:id` detalle de producto (reseñas y oferta de inventario limitado si el producto tiene una activa), `/admin` panel admin (catálogo, categorías, usuarios, ventas, historial, fraude — este último solo para administrador).
 
 Para un build de producción: `npm run build` (genera `frontend/app/dist/`).
 
@@ -250,7 +264,7 @@ Todos los usuarios semilla usan la misma contraseña: **`Tiendaya123!`**
 | admin@tiendaya.com | administrador | Acceso completo a `/admin` (catálogo, categorías, usuarios, historial, fraude) |
 | ventas@techstore.com | vendedor | Acceso a `/admin` acotado a su propio catálogo y "Mis ventas" (sin Categorías/Usuarios/Fraude) |
 | contacto@modaurbana.com | vendedor | Igual que el anterior |
-| carlos.mendez@email.com | comprador | Dirección de envío registrada |
+| carlos.mendez@email.com | comprador | Dirección de envío registrada; "Mi cuenta" con pedidos, perfil y direcciones |
 | sofia.lopez@email.com | comprador | Dirección de envío registrada |
 
 El registro público (`/`) solo crea cuentas de `comprador`. Para crear cuentas de `vendedor` o `administrador` nuevas, usa la pestaña "Usuarios" del panel admin.
@@ -323,10 +337,11 @@ backend/
       compensar_reserva_oferta.lua      Checkout fallido: devuelve las unidades y restaura la reserva
       confirmar_reserva_oferta.lua      Checkout confirmado: cierra la reserva como vendida
     blueprints/
-      auth.py                       /api/auth/register, /api/auth/login, /api/usuarios, /api/usuarios/<id>
-      direcciones.py                 /api/usuarios/<id_usuario>/direcciones (GET lista, POST alta; las usa el checkout)
-      checkout.py                    /api/checkout
-      catalogo.py                     /api/categorias, /api/categorias/<id>/filtros, /api/productos, /api/productos/<id>
+      auth.py                       /api/auth/register, /api/auth/login, /api/usuarios, /api/usuarios/<id>, /api/usuarios/<id>/perfil (PUT)
+      direcciones.py                 /api/usuarios/<id_usuario>/direcciones (GET, POST; máx. 3) y .../<id_direccion> (PUT, DELETE)
+      compradores.py                  /api/compradores/<id_comprador>/pedidos (historial de pedidos + total gastado)
+      checkout.py                    /api/checkout (carrito de Redis + reservas de oferta; copia el stock final a Mongo)
+      catalogo.py                     /api/categorias, /api/categorias/<id>/filtros, /api/productos (paginado), /api/productos/<id>
       historial.py                     /api/historial, /api/historial/<producto_id>
       vendedores.py                     /api/vendedores/<id>/ventas
       carrito.py                        /api/carrito/<id_usuario> (Redis, Entrega 2)
@@ -343,7 +358,7 @@ database/
     datos_semilla_masivos.sql      Semilla masiva: 19 subcategorías + 40 tiendas + 1000 productos e inventario (generado, idempotente)
     migracion_sp_checkout_precio_oferta.sql  Actualiza sp_procesar_checkout en bases existentes (precio de oferta por línea)
   mongo/
-    01_indexes.js                  Índices de referencia (ya se crean también desde la migración)
+    01_indexes.js                  Índices de referencia (la migración crea todos menos idx_activo_precio, ver paso 4)
     02_aggregation_queries.js      Consultas de agregación de referencia
   neo4j/
     01_constraints.cypher          Constraints de unicidad para nodos Cuenta/Producto (Entrega 2)
@@ -356,7 +371,8 @@ frontend/
   app/                        Sitio Vue 3 + Vite (único frontend, ver docs/STACK.md)
     src/
       views/                       VistaPublica.vue, VistaDetalleProducto.vue, VistaAdmin.vue
-      components/publico/           Catálogo, filtros, tarjeta de producto, carrito, checkout, login/registro, reseñas, oferta límite
+      components/publico/           Catálogo, filtros, tarjeta de producto, carrito, checkout, login/registro, reseñas, oferta límite, PerfilComprador ("Mi cuenta")
+      components/comunes/            Paginacion.vue (compartido por el catálogo público y el del admin)
       components/admin/              Catálogo, categorías, usuarios, ventas, historial, fraude (GestionFraude.vue)
       composables/                    useSesion, useToast, useCategorias, useCarrito (Redis-backed, Entrega 2)
       services/api.js                 apiFetch (wrapper de fetch contra el backend)

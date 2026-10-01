@@ -1,6 +1,6 @@
 # ADR-003 — Almacén clave-valor (Redis) para el carrito de compra y la oferta de inventario limitado
 
-Fecha: 2026-09-22 (documenta decisiones tomadas el 2026-09-13, al iniciar la Entrega 2)
+Fecha: 2026-09-22 (documenta decisiones tomadas el 2026-09-13, al iniciar la Entrega 2). Actualizado el 2026-09-23: la oferta pasó a tener precio de oferta y reserva temporal en el carrito, y el cupo se descuenta al comprar.
 
 Este registro cubre las dos funcionalidades de la Entrega 2 que se asignaron a un almacén clave-valor. Aunque ambas terminan en Redis, se evalúan por separado porque el problema de fondo es distinto: el carrito es un problema de **patrón de acceso sobre datos transitorios**; la oferta es un problema de **concurrencia sobre un contador compartido**.
 
@@ -46,7 +46,7 @@ Alternativa 3: un hash de Redis por usuario, `carrito:{id_usuario}`, donde cada 
 **Limitaciones asumidas:**
 - El carrito exige sesión iniciada: ya no hay carrito anónimo.
 - El checkout toma los productos del carrito guardado en Redis, no de lo que muestra el navegador. Si el carrito expiró, el checkout lo rechaza y el usuario debe volver a agregar los productos.
-- El precio guardado en el carrito es informativo: el precio que se cobra es el vigente en PostgreSQL al momento del checkout.
+- El precio guardado en el carrito es informativo: el precio que se cobra es el vigente en PostgreSQL al momento del checkout. La excepción son las líneas de oferta relámpago, que se cobran al precio de oferta guardado en la reserva (ver Decisión 2).
 
 ---
 
@@ -66,12 +66,22 @@ El enunciado exige resolverlo con operaciones atómicas del almacén clave-valor
 
 ### Decisión
 
-Alternativa 3: cada oferta usa dos claves en Redis:
+Alternativa 3. Cada oferta usa estas claves en Redis:
 
-- `oferta:{producto_id}:stock`: el contador que se descuenta;
-- `oferta:{producto_id}:limite`: el límite original, para mostrar "quedan X de Y".
+- `oferta:{producto_id}:stock`: el cupo **sin vender**. No baja al reservar, solo cuando un checkout consume la reserva;
+- `oferta:{producto_id}:limite`: el límite original, para mostrar "quedan X de Y";
+- `oferta:{producto_id}:precio`: el precio de oferta, fijo (no hay edición: para cambiarlo se finaliza la oferta y se crea otra);
+- `oferta:{producto_id}:id`: un id único de esa oferta, para que las reservas de una oferta anterior del mismo producto no cuenten en la nueva;
+- `oferta:{producto_id}:reservas`: un hash `id_usuario → reserva` (cantidad, precio, vencimiento y estado `activa` / `en_pago`).
 
-Ambas se crean con el **mismo TTL**, que es la duración de la oferta indicada al crearla, así que la oferta termina sola al vencer la ventana. La reserva ejecuta `backend/app/lua/reservar_oferta.lua` con `EVALSHA`: el script lee el contador, comprueba que alcanza y lo descuenta, todo dentro de una única ejecución atómica del servidor Redis. Solo el vendedor dueño del producto o un administrador pueden crear o cerrar una oferta.
+Las cuatro primeras se crean juntas, en un solo script (`crear_oferta.lua`), con el **mismo TTL**, que es la duración de la oferta indicada al crearla (`duracion_minutos`, de 1 a 10 080). Así la oferta termina sola al vencer la ventana. El hash de reservas vive la ventana más la duración de una reserva, para que una reserva hecha en el último segundo se respete completa.
+
+La compra pasa por dos etapas:
+
+1. **Reserva** (`reservar_oferta.lua`): calcula `disponible = cupo sin vender − reservas activas`, comprueba que alcanza y guarda la reserva, todo en una única ejecución atómica del servidor Redis. La reserva dura `RESERVA_OFERTA_TTL_SEGUNDOS` (60 por defecto) y agrega al carrito una línea aparte, con el precio de oferta. Si vence sin comprarse, la siguiente operación sobre la oferta la purga y las unidades vuelven a estar disponibles; quitar la línea o vaciar el carrito la libera en el acto.
+2. **Checkout**: `consumir_reserva_oferta.lua` pasa la reserva a `en_pago` y descuenta el cupo; luego `sp_procesar_checkout` cobra el precio de oferta y descuenta el `inventario` real de PostgreSQL. Si el pedido se confirma, `confirmar_reserva_oferta.lua` cierra la reserva como vendida; si PostgreSQL falla, `compensar_reserva_oferta.lua` devuelve las unidades. Si la reserva ya venció, el checkout responde `409 RESERVA_OFERTA_EXPIRADA`.
+
+Todas las horas se toman de `TIME` de Redis, no del reloj de cada proceso Flask. Solo el vendedor dueño del producto o un administrador pueden crear o cerrar una oferta; solo un comprador puede reservar.
 
 ### Justificación
 
@@ -83,7 +93,13 @@ Ambas se crean con el **mismo TTL**, que es la duración de la oferta indicada a
 
 ### Evidencia
 
-`backend/scripts/prueba_concurrencia_oferta.py` lanza 50 solicitudes concurrentes de "reservar 1 unidad" contra una oferta con límite de 10. El resultado esperado y obtenido es: **10 reservas exitosas, 40 rechazadas y stock final en Redis igual a 0**, sin sobreventa. El servidor Flask corre con `threaded=True` para que las solicitudes lleguen realmente en paralelo.
+`backend/scripts/prueba_concurrencia_oferta.py` lanza 50 reservas concurrentes de 1 unidad (50 compradores distintos, 20 hilos) contra una oferta con límite de 10. Resultado de la corrida del 2026-09-23 contra el servidor real:
+
+- **10 reservas exitosas y 40 rechazadas** (`409 Stock insuficiente en la oferta`), sin sobreventa;
+- después de reservar: `stock_restante = 0`, `unidades_reservadas = 10` y `unidades_vendidas = 0` (reservar no es vender);
+- al vaciar los carritos de los 10 ganadores, `stock_restante` vuelve a 10.
+
+El servidor Flask corre con `threaded=True` para que las solicitudes lleguen realmente en paralelo.
 
 ### Consecuencias
 
@@ -92,7 +108,8 @@ Ambas se crean con el **mismo TTL**, que es la duración de la oferta indicada a
 - La oferta vence sola al terminar su ventana, sin procesos de limpieza.
 
 **Limitaciones asumidas:**
-- El cupo de la oferta es **independiente del inventario real** de PostgreSQL: es una bolsa de unidades apartada para la promoción, y no se sincroniza con `inventario`.
-- La reserva descuenta el cupo, pero todavía no genera un pedido ni aplica un precio de oferta: convertirla en compra es trabajo pendiente.
-- Si Redis se reinicia durante una oferta, el contador depende de la persistencia AOF; una oferta en curso podría perderse.
-- El backend carga el script Lua al arrancar, así que **el servidor no inicia si Redis no está disponible**.
+- El cupo de la oferta es una bolsa de unidades apartada para la promoción, **independiente del inventario real**: crear una oferta no descuenta nada de PostgreSQL. Las unidades que se venden en oferta sí se descuentan del `inventario` al confirmar la compra, igual que una compra normal.
+- El precio de oferta se valida contra el `precio_base` de MongoDB al crear la oferta, y contra el de PostgreSQL en el checkout. Si un producto se editó solo en Mongo y los dos precios no coinciden, una oferta creada sin problema puede fallar al pagar; en ese caso el checkout devuelve las unidades a la oferta.
+- Si el proceso Flask muere a mitad de un checkout, la reserva queda `en_pago` hasta 5 minutos (`MARGEN_PAGO_MS`) y luego se purga. Sus unidades se quedan contadas como vendidas: nunca hay sobreventa, a lo sumo alguna unidad sin vender.
+- Si Redis se reinicia durante una oferta, el cupo y las reservas dependen de la persistencia AOF; una oferta en curso podría perderse.
+- Los scripts Lua se cargan en Redis la primera vez que se usan (y se recargan solos si Redis perdió su caché), así que el backend arranca aunque Redis esté caído; mientras tanto, las rutas que usan Redis responden `500`.

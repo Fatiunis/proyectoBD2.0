@@ -28,15 +28,16 @@ Eres el desarrollador frontend de TiendaYa, un e-commerce de curso (Bases de Dat
 - `components/publico/FormularioCheckout.vue` → carga las direcciones del comprador con `GET /api/usuarios/<id>/direcciones` y permite crear una nueva con `POST` a la misma ruta; el checkout manda `id_direccion`.
 - Otros componentes del sitio público (`components/publico/`):
   - `NavPublica.vue` → barra superior: búsqueda (emite `buscar`), cambio de vista catálogo/carrito y contador del carrito (`useCarrito`).
-  - `CatalogoProductos.vue` → lista de productos (`GET /api/productos`, con búsqueda y filtros), carga categorías y filtros por categoría (`GET /api/categorias/<id>/filtros`); usa `FiltrosCatalogo.vue` (emite `cambiar`/`limpiar`) y `TarjetaProducto.vue`.
+  - `PerfilComprador.vue` → "Mi cuenta" (botón en `NavPublica.vue`, solo rol `comprador`): pedidos con total gastado (`GET /api/compradores/<id>/pedidos`), edición de perfil (`PUT /api/usuarios/<id>/perfil`) y direcciones (`GET`/`POST`/`PUT`/`DELETE /api/usuarios/<id>/direcciones[/<id_direccion>]`, máximo 3).
+  - `CatalogoProductos.vue` → lista paginada de productos (`GET /api/productos` con `pagina`/`por_pagina`, que devuelve `{items, total, ...}` y no una lista; usa `components/comunes/Paginacion.vue`, con búsqueda y filtros), carga categorías y filtros por categoría (`GET /api/categorias/<id>/filtros`); usa `FiltrosCatalogo.vue` (emite `cambiar`/`limpiar`) y `TarjetaProducto.vue`.
   - `Carrito.vue` → vista del carrito (`useCarrito`) con el paso al checkout y la pantalla de compra completada.
   - `FormularioLogin.vue` / `FormularioRegistro.vue` → `POST /api/auth/login` y `POST /api/auth/register` del sitio público.
   - `ResenasProducto.vue` → reseñas de un producto (`GET /api/resenas/<producto_id>`, marca "Compra verificada") y formulario para escribir una (`POST /api/resenas`), solo para sesiones con rol `comprador`. Se usa en `VistaDetalleProducto.vue`.
-  - `OfertaLimitada.vue` → oferta de inventario limitado del producto (`GET /api/ofertas/<producto_id>`, "quedan X de Y"): el comprador reserva unidades (`POST .../reservar`) y el administrador o el vendedor dueño del producto la crea (`POST /api/ofertas`, cantidad límite y duración en minutos) o la elimina (`DELETE`). Se usa en `VistaDetalleProducto.vue`.
+  - `OfertaLimitada.vue` → oferta de inventario limitado del producto (`GET /api/ofertas/<producto_id>`, "quedan X de Y"): el comprador reserva unidades (`POST .../reservar`, las aparta 1 minuto y agrega al carrito una línea "Oferta relámpago" con cuenta regresiva) y el administrador o el vendedor dueño del producto la crea (`POST /api/ofertas`, cantidad límite, precio de oferta y duración en minutos) o la elimina (`DELETE`). Se usa en `VistaDetalleProducto.vue`.
 - Otros componentes del panel admin (`components/admin/`):
   - `SidebarAdmin.vue` → navegación por pestañas (emite `cambiar-tab`); `ventas` solo para vendedor, `categorias`/`usuarios`/`fraude` solo para administrador.
   - `LoginAdmin.vue` → acceso al panel (`POST /api/auth/login`).
-  - `GestionProductos.vue` → catálogo del panel ("Mi catálogo" para el vendedor), abre `FormularioProducto.vue`.
+  - `GestionProductos.vue` → catálogo paginado del panel ("Mi catálogo" para el vendedor, con `Paginacion.vue`), abre `FormularioProducto.vue`.
   - `GestionCategorias.vue` + `FormularioCategoria.vue` → lista de categorías y alta de una nueva (`POST /api/categorias`) con nombre, descripción, categoría padre opcional y `esquema_atributos` (filas `clave`/`etiqueta`/`tipo`); emite `creada`.
   - `GestionUsuarios.vue` → lista (`GET /api/usuarios`), edición (`PUT /api/usuarios/<id>`) y alta (`POST /api/auth/register`) de usuarios.
   - `GestionVentas.vue` → "Mis ventas" del vendedor (`GET /api/vendedores/<id>/ventas`).

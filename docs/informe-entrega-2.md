@@ -6,7 +6,7 @@
 **Repositorio:** github.com/Fatiunis/proyectoBD2.0
 **Tema de la entrega:** concurrencia, señales de comportamiento y relaciones entre entidades (clave-valor, columnares y grafos)
 
-> **Borrador.** Las secciones marcadas con ✏️ las completa el equipo. La evidencia técnica corresponde a pruebas ejecutadas contra el sistema real (PostgreSQL 18, MongoDB 8, Redis 7 y Neo4j 5) el 22 de septiembre de 2026.
+> **Borrador.** Las secciones marcadas con ✏️ las completa el equipo. La evidencia técnica corresponde a pruebas ejecutadas contra el sistema real (PostgreSQL 18, MongoDB 8, Redis 7 y Neo4j 5) el 22 y el 23 de septiembre de 2026.
 
 ---
 
@@ -25,7 +25,7 @@
 | Requerimiento del enunciado | Componente | Dónde está |
 |---|---|---|
 | Carrito persistente con expiración por inactividad | Redis | `backend/app/blueprints/carrito.py`, `backend/app/blueprints/checkout.py` |
-| Oferta de inventario limitado, con ventana de tiempo y sin sobreventa bajo concurrencia | Redis + script Lua | `backend/app/blueprints/ofertas.py`, `backend/app/lua/reservar_oferta.lua` |
+| Oferta de inventario limitado, con ventana de tiempo y sin sobreventa bajo concurrencia | Redis + scripts Lua | `backend/app/blueprints/ofertas.py`, `backend/app/ofertas_redis.py`, `backend/app/lua/` |
 | Evaluación comparativa grafos vs. columnar | Documento de decisión | `docs/decisiones/ADR-002-grafos-vs-columnar.md` |
 | Familia seleccionada: detección de fraude en reseñas | Neo4j | `backend/app/blueprints/resenas.py`, `backend/app/blueprints/fraude.py` |
 | Justificación de incorporar el almacén clave-valor | Documento de decisión | `docs/decisiones/ADR-003-redis-carrito-y-oferta.md` |
@@ -66,22 +66,27 @@ La decisión de usar Redis y sus alternativas (dejar el carrito en el navegador 
 
 ### Implementación
 
-- Cada oferta usa dos claves:
-  - `oferta:{producto_id}:stock`, el contador que se descuenta;
-  - `oferta:{producto_id}:limite`, el límite original, para mostrar "quedan X de Y".
-- **Ventana de tiempo**: al crear la oferta se indica `duracion_minutos` (de 1 a 10 080, es decir, hasta 7 días), y ambas claves se crean con ese TTL. La oferta **vence sola**: al expirar, las claves desaparecen y cualquier reserva responde `404`. La página del producto muestra una cuenta regresiva y la hora de fin en hora de Guatemala.
-- **Reserva atómica sin bloqueos de aplicación**: `reservar_oferta.lua` lee el contador, comprueba que alcanza y lo descuenta en una sola ejecución del servidor Redis (`EVALSHA`). Redis no intercala otros comandos durante un script, así que no existe la carrera entre "leer" y "descontar". No se usan locks en Python ni `WATCH`/`MULTI`.
-- **Control de quién gestiona la oferta**: solo el vendedor dueño del producto o un administrador pueden crear o cerrar una oferta.
+- Cada oferta usa estas claves:
+  - `oferta:{producto_id}:stock`, el cupo sin vender (baja al comprar, no al reservar);
+  - `oferta:{producto_id}:limite`, el límite original, para mostrar "quedan X de Y";
+  - `oferta:{producto_id}:precio`, el precio de oferta, fijo y menor que el precio normal;
+  - `oferta:{producto_id}:id`, un id único de esa oferta;
+  - `oferta:{producto_id}:reservas`, un hash con la reserva de cada comprador.
+- **Ventana de tiempo**: al crear la oferta se indica `duracion_minutos` (de 1 a 10 080, es decir, hasta 7 días), y las cuatro primeras claves se crean juntas (`crear_oferta.lua`) con ese TTL. La oferta **vence sola**: al expirar, las claves desaparecen y cualquier reserva responde `404`. La página del producto muestra una cuenta regresiva y la hora de fin en hora de Guatemala.
+- **Reserva temporal, atómica y sin bloqueos de aplicación**: `reservar_oferta.lua` calcula lo disponible (cupo sin vender menos reservas activas), comprueba que alcanza y guarda la reserva, en una sola ejecución del servidor Redis (`EVALSHA`). Redis no intercala otros comandos durante un script, así que no existe la carrera entre "leer" y "apartar". No se usan locks en Python ni `WATCH`/`MULTI`. La reserva aparta las unidades por 60 segundos (`RESERVA_OFERTA_TTL_SEGUNDOS`) y agrega al carrito una línea "Oferta relámpago" con el precio de oferta y una cuenta regresiva; si no se compra a tiempo, las unidades vuelven a la oferta.
+- **Compra**: el checkout consume la reserva en Redis, cobra el precio de oferta y descuenta también el `inventario` de PostgreSQL dentro de `sp_procesar_checkout`. Si el procedimiento falla, la reserva se compensa y las unidades vuelven a la oferta; si la reserva ya había vencido, responde `409 RESERVA_OFERTA_EXPIRADA`.
+- **Control de quién gestiona la oferta**: solo el vendedor dueño del producto o un administrador pueden crear o cerrar una oferta; solo un comprador puede reservar.
 
 ### Evidencia de concurrencia
 
-Script: `backend/scripts/prueba_concurrencia_oferta.py`. Lanza 50 solicitudes simultáneas (20 hilos) de "reservar 1 unidad" contra una oferta con límite de 10 unidades sobre un producto real.
+Script: `backend/scripts/prueba_concurrencia_oferta.py`. Lanza 50 reservas simultáneas de 1 unidad (50 compradores distintos, 20 hilos) contra una oferta con límite de 10 unidades sobre un producto real (PROD-0001, precio de oferta 10 % menor). Después vacía los carritos de los ganadores para comprobar que las unidades vuelven a la oferta. Corrida del 23 de septiembre de 2026:
 
 ```
-Oferta creada: {'cantidad_limite': 10, 'duracion_minutos': 5, 'segundos_restantes': 300, ...}
-Resultados: 10 éxitos (201), 40 rechazos.  Desglose: {409: 40}
-Stock restante real: 0
-RESULTADO: PASS -- no hubo sobreventa bajo concurrencia.
+Oferta creada: {'cantidad_limite': 10, 'duracion_minutos': 5, 'precio_base': 12500.0, 'precio_oferta': 11250.0, 'segundos_restantes': 300, ...}
+Resultados: 10 éxitos (201), 40 rechazos.  Desglose: {'409 Stock insuficiente en la oferta': 40}
+stock_restante=0 unidades_reservadas=10 unidades_vendidas=0
+stock_restante tras liberar=10
+RESULTADO: PASS -- no hubo sobreventa bajo concurrencia y liberar devolvió el cupo.
 ```
 
 ### Evidencia de la ventana de tiempo y del control de dueño
@@ -161,10 +166,9 @@ Para cada integración se indica su ventana de consistencia; ninguna usa commit 
 ## 8. Limitaciones conocidas
 
 - **Sin autenticación en el servidor**: el rol y el `id_usuario` los envía el cliente en cada solicitud y el backend los acepta sin verificarlos. Por ejemplo, alguien que se declare "administrador" en la solicitud puede gestionar ofertas o consultar alertas de fraude. La autenticación y autorización explícitas son un requerimiento de la entrega final.
-- **La oferta es un cupo aparte**: no descuenta el inventario de PostgreSQL, y una reserva todavía no genera un pedido ni aplica un precio de oferta.
+- **La oferta es un cupo aparte**: crearla no descuenta nada del inventario de PostgreSQL; solo las unidades que se compran en oferta se descuentan, al confirmar el pedido. El precio de oferta se valida contra MongoDB al crearla y contra PostgreSQL al pagar, así que, si los dos precios no coinciden, una oferta puede fallar en el checkout (las unidades vuelven a la oferta).
 - **Sincronización de reseñas hacia Neo4j sin 2PC**: si Neo4j no está disponible al crear una reseña, esta queda guardada en MongoDB y solo se registra una advertencia; el grafo queda desactualizado hasta volver a sincronizarlo.
-- **Catálogo y stock en dos lugares**: el checkout descuenta stock en PostgreSQL, pero el catálogo de MongoDB muestra su propio valor; no se sincronizan automáticamente. En la prueba del pedido 11, PostgreSQL quedó en 57 unidades y MongoDB siguió mostrando 58.
-- **Redis es obligatorio para arrancar**: el backend carga el script Lua al iniciar, así que no arranca si Redis no está disponible.
+- **Catálogo en dos lugares**: el checkout usa el precio y el stock de PostgreSQL, y el catálogo público se lee de MongoDB. Cuando se registró la prueba del pedido 11, no se sincronizaban (PostgreSQL quedó en 57 unidades y MongoDB siguió mostrando 58). Desde el 23 de septiembre, el **stock** se copia en las dos direcciones con mejor esfuerzo: tras cada compra, de PostgreSQL a MongoDB; al editar el stock en el admin, de MongoDB a PostgreSQL. El precio y los demás campos editados en el admin siguen solo en MongoDB.
 
 ---
 

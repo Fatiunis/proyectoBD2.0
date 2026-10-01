@@ -10,9 +10,9 @@ Eres el desarrollador backend de TiendaYa, un e-commerce de curso (Bases de Dato
 # Arquitectura de datos — la regla más importante del proyecto
 - **PostgreSQL** (SQLAlchemy, modelos en `backend/app/models.py`: `Usuario`, `Direccion`, `Categoria`, `Producto`, `Inventario`, `Pedido`, `LineaPedido`): usuarios/autenticación, direcciones de envío, categorías, productos/inventario (el alta de un producto nuevo desde el admin crea también su fila en `productos` + `inventario`), pedidos, líneas de pedido, y el procedimiento almacenado transaccional `sp_procesar_checkout` (bloqueo pesimista `SELECT ... FOR UPDATE`, rollback automático ante cualquier excepción) invocado vía `db.session.execute(text("CALL sp_procesar_checkout(...)"))` — la lógica transaccional del checkout vive intencionalmente en el SP, no se reescribe en Python/ORM. No hay SQL crudo con `psycopg2` en ningún endpoint.
 - **MongoDB** (`pymongo`, base `tiendaya_nosql`): colección `productos` (catálogo con atributos polimórficos por categoría, embebe `imagenes` y datos del vendedor), `historial_cambios_productos` (event sourcing — permite reconstruir el estado de un producto en cualquier fecha) y `resenas` (índice único `producto_id` + `autor.id_usuario`: una reseña por cuenta y producto).
-- **Redis** (`redis_client`): carrito por usuario (hash con TTL `CARRITO_TTL_SEGUNDOS`, se renueva en cada operación; el checkout lo lee de ahí y lo borra tras confirmar el pedido) y ofertas de inventario limitado (keys `oferta:{producto_id}:stock` / `:limite`; la reserva es atómica vía el script Lua `app/lua/reservar_oferta.lua`, cargado con `script_load` + `evalsha`). El cupo de una oferta es independiente del stock real de Postgres/Mongo.
+- **Redis** (`redis_client`): carrito por usuario (hash con TTL `CARRITO_TTL_SEGUNDOS`, se renueva en cada operación; el checkout lo lee de ahí y lo borra tras confirmar el pedido) y ofertas de inventario limitado (keys `oferta:{producto_id}:stock` / `:limite` / `:precio` / `:id` con el TTL de la oferta y el hash `:reservas`; todo cambio de estado pasa por un script Lua de `app/lua/`, vía `app/ofertas_redis.py`). Reservar aparta unidades por `RESERVA_OFERTA_TTL_SEGUNDOS` sin descontar el cupo; el checkout consume la reserva, cobra el precio de oferta y la confirma o compensa según el resultado del SP. El cupo es independiente del stock real, pero lo vendido en oferta sí se descuenta del `inventario` de Postgres.
 - **Neo4j** (`neo4j_driver`): cada reseña guardada en Mongo se espeja como `(:Cuenta)-[:CALIFICO]->(:Producto)`; `GET /api/fraude/alertas` consulta ese grafo. No hay 2PC entre Mongo y Neo4j: si Neo4j falla, la reseña en Mongo queda igual y se responde 201.
-- **Limitación conocida y deliberada (no la "arregles" sin que el usuario lo pida):** el checkout (`POST /api/checkout` → `sp_procesar_checkout`) opera sobre las tablas `productos`/`inventario` de PostgreSQL, **no** sobre MongoDB. Si el panel admin edita un producto, el cambio solo se refleja en Mongo; el checkout seguiría cobrando el precio/stock viejo de Postgres. Los dos catálogos no se sincronizan automáticamente. Si una tarea toca esto, avisa explícitamente del efecto en vez de asumir que ambas fuentes están alineadas.
+- **Limitación conocida y deliberada (no la "arregles" sin que el usuario lo pida):** el checkout (`POST /api/checkout` → `sp_procesar_checkout`) opera sobre las tablas `productos`/`inventario` de PostgreSQL, **no** sobre MongoDB. Solo el **stock** se sincroniza, con mejor esfuerzo y sin 2PC: `catalogo.py` copia al `inventario` de Postgres el stock editado desde el admin, y `checkout.py` copia a Mongo el stock que quedó en Postgres tras confirmar un pedido (en ambos casos, si la copia falla solo se registra una advertencia). El **precio** y los demás campos editados en el admin siguen solo en Mongo, así que el checkout cobra el precio de Postgres. Si una tarea toca esto, avisa explícitamente del efecto en vez de asumir que ambas fuentes están alineadas.
 - IDs de producto en Mongo tienen formato `PROD-XXXX` (o `PROD-<SKU>` para los creados a mano desde el admin); el campo `id_sql_origen` conserva el id numérico de Postgres (tanto en los migrados como en los dados de alta desde el admin).
 
 # Estructura del paquete (`backend/`)
@@ -21,17 +21,20 @@ backend/
   main.py                   # entry point: from app import create_app; app.run(...)
   app/
     __init__.py              # create_app(): Flask + CORS + registro de blueprints
-    config.py                 # load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, CARRITO_TTL_SEGUNDOS, NEO4J_URI/USER/PASSWORD
+    config.py                 # load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, CARRITO_TTL_SEGUNDOS, RESERVA_OFERTA_TTL_SEGUNDOS, NEO4J_URI/USER/PASSWORD
     extensions.py              # db = SQLAlchemy() + cliente Mongo (mongo_db, col_productos, col_historial, col_resenas) + redis_client + neo4j_driver + ZONA_GUATEMALA
     models.py                   # modelos SQLAlchemy: Usuario, Direccion, Categoria, Producto, Inventario, Pedido, LineaPedido
+    ofertas_redis.py             # keys de la oferta, carga perezosa de los scripts Lua (script_load + evalsha, recarga ante NoScriptError) y wrappers; lo usan ofertas, carrito y checkout
     lua/
-      reservar_oferta.lua        # script atómico de reserva de cupo de una oferta (Redis)
+      crear_oferta.lua / consultar_oferta.lua / reservar_oferta.lua / liberar_reserva_oferta.lua / estado_linea_oferta.lua
+      consumir_reserva_oferta.lua / compensar_reserva_oferta.lua / confirmar_reserva_oferta.lua   # etapas de la reserva en el checkout
     blueprints/
-      auth.py                  # POST /api/auth/register, POST /api/auth/login, GET /api/usuarios, PUT /api/usuarios/<id>
-      direcciones.py            # GET/POST /api/usuarios/<id>/direcciones (Postgres)
+      auth.py                  # POST /api/auth/register, POST /api/auth/login, GET /api/usuarios, PUT /api/usuarios/<id>, PUT /api/usuarios/<id>/perfil (nombre, teléfono, contraseña)
+      direcciones.py            # GET/POST /api/usuarios/<id>/direcciones, PUT/DELETE /api/usuarios/<id>/direcciones/<id_direccion> (Postgres; máx. 3 por usuario)
+      compradores.py             # GET /api/compradores/<id_comprador>/pedidos (pedidos con líneas + total gastado sin cancelados)
       carrito.py                 # GET/DELETE /api/carrito/<id_usuario>, POST /api/carrito/<id_usuario>/items, PUT/DELETE /api/carrito/<id_usuario>/items/<id_producto> (Redis)
-      checkout.py                 # POST /api/checkout (lee el carrito de Redis -> sp_procesar_checkout en Postgres)
-      catalogo.py                  # GET/POST /api/categorias, GET /api/categorias/<id>/filtros, GET/POST /api/productos, GET /api/productos/<id>
+      checkout.py                 # POST /api/checkout (carrito de Redis + reservas de oferta -> sp_procesar_checkout en Postgres; luego copia el stock a Mongo)
+      catalogo.py                  # GET/POST /api/categorias, GET /api/categorias/<id>/filtros, GET/POST /api/productos (GET paginado: {items, total, pagina, por_pagina, total_paginas}), GET /api/productos/<id>
       historial.py                  # GET /api/historial (feed de eventos con filtros), GET /api/historial/<producto_id> (estado point-in-time)
       ofertas.py                     # POST /api/ofertas, GET/DELETE /api/ofertas/<producto_id>, POST /api/ofertas/<producto_id>/reservar (Redis)
       resenas.py                      # POST /api/resenas, GET /api/resenas/<producto_id> (Mongo + espejo en Neo4j)
