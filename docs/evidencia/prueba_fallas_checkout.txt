@@ -1,0 +1,68 @@
+==========================================================================
+PRUEBA DE FALLAS SIMULADAS - CHECKOUT DISTRIBUIDO
+==========================================================================
+Comprador id=8 (dirección 3)
+Producto A: PROD-0003 (id_sql 3) Playera Oversize Negra - stock 37
+Producto B: PROD-0008 (id_sql 8) Playera Casual Gris Jaspe - stock 37
+Producto C: PROD-0009 (id_sql 9) Playera Estampada Cyberpunk - stock 31
+
+[E0] Camino feliz + reintento con la misma clave de idempotencia
+   [OK  ] checkout responde 201  (201 37)
+   [OK  ] sin sincronización pendiente
+   [OK  ] se creó exactamente 1 pedido
+   [OK  ] stock en PostgreSQL bajó 1  (37 -> 36)
+   [OK  ] MongoDB = PostgreSQL  (mongo=36)
+   [OK  ] Elasticsearch = PostgreSQL  (es=36)
+   [OK  ] carrito sin la línea comprada
+   [OK  ] todos los eventos del outbox procesados  ({'procesado'})
+   [OK  ] reintento con la misma clave -> 200 repetido, mismo pedido  (200 pedido 37)
+   [OK  ] el reintento NO creó otro pedido ni cobró dos veces
+
+[E1] Redis cae al leer el carrito
+   [OK  ] responde 503 CARRITO_NO_DISPONIBLE  (503 CARRITO_NO_DISPONIBLE)
+   [OK  ] mensaje al usuario dice que no hubo cobro  (No pudimos leer tu carrito en este momento. No se realizó ningún cobro; intenta de nuevo en unos segundos.)
+   [OK  ] no se creó pedido
+   [OK  ] el stock no cambió
+   [OK  ] el carrito sigue intacto
+   [OK  ] no quedó clave de idempotencia
+
+[E2] PostgreSQL cae antes del COMMIT (con una línea de oferta relámpago)
+   [OK  ] reserva de 2 unidades en la oferta  (201)
+   [OK  ] responde 503 PAGO_NO_CONFIRMADO  (503 PAGO_NO_CONFIRMADO)
+   [OK  ] no se creó pedido (rollback)
+   [OK  ] el inventario de PostgreSQL no cambió
+   [OK  ] la clave de idempotencia también se revirtió
+   [OK  ] COMPENSACIÓN: la reserva volvió a estar activa y no hay unidades vendidas  (reservadas=2 vendidas=0)
+   [OK  ] el carrito sigue intacto (línea normal + oferta)
+   [OK  ] reintentar con la misma clave (sin falla) completa la compra  (201 pedido 39)
+   [OK  ] ahora sí: 2 unidades vendidas en la oferta y 2 menos en PostgreSQL  (vendidas=2 stock 31 -> 29)
+
+[E3] Redis cae DESPUÉS del COMMIT (no se puede limpiar el carrito)
+   [OK  ] responde 201: el pedido es válido aunque Redis falló  (201 pedido 40)
+   [OK  ] se creó 1 pedido
+   [OK  ] el carrito TODAVÍA tiene la línea pagada (ventana de inconsistencia)
+   [OK  ] evento limpiar_carrito pendiente con el error registrado  (FallaSimulada: Falla simulada (redis_post_commit): el motor no respondió)
+   [OK  ] un checkout con OTRA clave sobre el carrito viejo no cobra de nuevo (409 CARRITO_VACIO)  (409 CARRITO_VACIO)
+   [OK  ] sigue habiendo un solo pedido
+   [OK  ] el cliente reintenta con la misma clave -> 200 repetido, mismo pedido  (200)
+   [OK  ] NO hay pedido duplicado aunque el carrito seguía lleno
+   [OK  ] el carrito quedó limpio
+   [OK  ] todos los eventos terminaron procesados  ({'procesado'})
+
+[E4] MongoDB cae al copiar el stock después del COMMIT
+   [OK  ] responde 201 con sincronización pendiente  (201 pedido 41)
+   [OK  ] MongoDB quedó con el stock VIEJO (inconsistencia temporal)  (mongo=37 postgres=36)
+   [OK  ] Elasticsearch sí se actualizó (falla aislada por motor)
+   [OK  ] el relevo corrigió MongoDB sin intervención  (convergió en 20 s)
+   [OK  ] evento stock_mongo procesado en el 2.º intento o después  (intentos=2)
+
+[E5] Caída REAL de Elasticsearch (docker compose stop elasticsearch)
+   [OK  ] el buscador responde 503 BUSCADOR_NO_DISPONIBLE  (503)
+   [OK  ] el checkout NO depende del buscador: 201  (pedido 42)
+   [OK  ] evento stock_elasticsearch quedó pendiente  (ConnectionError: Connection error)
+   [OK  ] MongoDB sí quedó al día
+   [OK  ] al volver Elasticsearch, el relevo puso su stock al día  (convergió 25 s después de levantarlo)
+
+==========================================================================
+RESUMEN: 45/45 verificaciones correctas
+RESULTADO: PASS

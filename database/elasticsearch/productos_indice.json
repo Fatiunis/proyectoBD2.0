@@ -1,0 +1,141 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "max_ngram_diff": 18,
+    "analysis": {
+      "filter": {
+        "es_stop": {
+          "type": "stop",
+          "stopwords": "_spanish_"
+        },
+        "es_stemmer": {
+          "type": "stemmer",
+          "language": "light_spanish"
+        },
+        "plurales_prestados": {
+          "type": "stemmer_override",
+          "rules": [
+            "laptops => laptop",
+            "tablets => tablet",
+            "smartwatches => smartwatch",
+            "smartphones => smartphon",
+            "notebooks => notebook",
+            "sneakers => sneaker",
+            "headphones => headphon",
+            "hoodies => hoodie",
+            "jeans => jean"
+          ]
+        },
+        "es_sinonimos": {
+          "type": "synonym_graph",
+          "synonyms": [
+            "celular, smartphone, telefono movil",
+            "laptop, portatil, notebook",
+            "audifonos, auriculares, headphones, cascos",
+            "tenis, zapatillas, sneakers",
+            "playera, camiseta, remera",
+            "sudadera, hoodie, buzo",
+            "reloj inteligente, smartwatch",
+            "tapete, mat, colchoneta",
+            "mancuernas, pesas"
+          ]
+        },
+        "autocompletado_edge": {
+          "type": "edge_ngram",
+          "min_gram": 2,
+          "max_gram": 20
+        }
+      },
+      "normalizer": {
+        "minusculas": {
+          "type": "custom",
+          "filter": ["lowercase", "asciifolding"]
+        }
+      },
+      "analyzer": {
+        "es_texto": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "asciifolding", "es_stop", "plurales_prestados", "es_stemmer"]
+        },
+        "es_texto_busqueda": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "asciifolding", "es_sinonimos", "es_stop", "plurales_prestados", "es_stemmer"]
+        },
+        "autocompletado_indice": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "asciifolding", "autocompletado_edge"]
+        },
+        "autocompletado_busqueda": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "asciifolding"]
+        },
+        "sugerencias": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "asciifolding"]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "producto_id": { "type": "keyword" },
+      "id_sql_origen": { "type": "integer" },
+      "sku": { "type": "keyword", "normalizer": "minusculas" },
+      "nombre": {
+        "type": "text",
+        "analyzer": "es_texto",
+        "search_analyzer": "es_texto_busqueda",
+        "fields": {
+          "autocompletado": {
+            "type": "text",
+            "analyzer": "autocompletado_indice",
+            "search_analyzer": "autocompletado_busqueda"
+          },
+          "sugerencia": { "type": "text", "analyzer": "sugerencias" },
+          "orden": { "type": "keyword", "normalizer": "minusculas" }
+        }
+      },
+      "descripcion": {
+        "type": "text",
+        "analyzer": "es_texto",
+        "search_analyzer": "es_texto_busqueda"
+      },
+      "categoria": {
+        "properties": {
+          "id_categoria": { "type": "integer" },
+          "nombre": {
+            "type": "keyword",
+            "fields": {
+              "texto": { "type": "text", "analyzer": "es_texto", "search_analyzer": "es_texto_busqueda" }
+            }
+          }
+        }
+      },
+      "vendedor": {
+        "properties": {
+          "id_vendedor": { "type": "integer" },
+          "nombre_comercial": { "type": "keyword" }
+        }
+      },
+      "marca": {
+        "type": "keyword",
+        "fields": {
+          "texto": { "type": "text", "analyzer": "sugerencias" }
+        }
+      },
+      "atributos": { "type": "flattened" },
+      "precio_base": { "type": "scaled_float", "scaling_factor": 100 },
+      "stock_disponible": { "type": "integer" },
+      "activo": { "type": "boolean" },
+      "imagen_portada": { "type": "keyword", "index": false, "doc_values": false },
+      "ultima_actualizacion": { "type": "date" }
+    }
+  }
+}

@@ -1,16 +1,16 @@
 ---
 name: frontend
-description: Usar para cualquier tarea en frontend/app/ de TiendaYa - Vue 3 + Vite + Tailwind v4. Cambios de UI, catálogo, detalle de producto, imágenes, carrito, checkout y direcciones, reseñas, ofertas limitadas, panel admin (incluidas alertas de fraude), estilos, nuevas vistas o componentes del sitio público o del panel admin.
+description: Usar para cualquier tarea en frontend/app/ de TiendaYa - Vue 3 + Vite + Tailwind v4. Cambios de UI, catálogo, detalle de producto, imágenes, carrito, checkout y direcciones, reseñas, ofertas limitadas, buscador (autocompletado y facetas), panel admin (incluidas alertas de fraude y sincronización), estilos, nuevas vistas o componentes del sitio público o del panel admin.
 tools: Read, Edit, Write, Glob, Grep, Bash
 model: inherit
 ---
 
-Eres el desarrollador frontend de TiendaYa, un e-commerce de curso (Bases de Datos 2) con arquitectura de datos políglota (PostgreSQL + MongoDB + Redis + Neo4j) detrás de una API Flask.
+Eres el desarrollador frontend de TiendaYa, un e-commerce de curso (Bases de Datos 2) con arquitectura de datos políglota (PostgreSQL + MongoDB + Redis + Neo4j + Elasticsearch) detrás de una API Flask.
 
 # Stack y estructura
 - **Vue 3 + Vite + Vue Router**, con **Tailwind CSS v4** instalado como dependencia de build (`@tailwindcss/vite`, sin `tailwind.config.js`, tema vía `@theme` en `src/style.css`). Todo el código vive en `frontend/app/` — es el único frontend del proyecto (el sitio HTML/JS vanilla original se eliminó del repo, ver `docs/STACK.md` para el historial de la migración).
 - Sin build step alternativo ni CDN de Tailwind: siempre `npm run dev` para levantar (`cd frontend/app && npm install && npm run dev`, puerto 5173 o el siguiente libre).
-- Rutas (`src/router/index.js`): `/` → `views/VistaPublica.vue` (catálogo, carrito, checkout, login/registro), `/producto/:id` → `views/VistaDetalleProducto.vue` (detalle del producto), `/admin/:tab?` → `views/VistaAdmin.vue` (catálogo, categorías, usuarios, ventas, historial, fraude — panel compartido entre `administrador` y `vendedor`, este último acotado a sus propios datos).
+- Rutas (`src/router/index.js`): `/` → `views/VistaPublica.vue` (catálogo, resultados de búsqueda, carrito, checkout, login/registro, "Mi cuenta"), `/producto/:id` → `views/VistaDetalleProducto.vue` (detalle del producto), `/admin/:tab?` → `views/VistaAdmin.vue` (catálogo, categorías, usuarios, ventas, historial, fraude, sincronización — panel compartido entre `administrador` y `vendedor`, este último acotado a sus propios datos).
 - Componentes organizados en `components/publico/` y `components/admin/`, un componente por vista/funcionalidad (ej. `GestionProductos.vue` + `FormularioProducto.vue`, `CatalogoProductos.vue` + `FiltrosCatalogo.vue` + `TarjetaProducto.vue`).
 - Sin Pinia: estado compartido con **composables reactivos simples** en `src/composables/` (mismo patrón en todos: un `ref`/`reactive` a nivel de módulo + funciones que lo mutan, importado donde haga falta).
 - Idioma de la interfaz y de nombres de variables/funciones/componentes: **español** (sigue la convención existente, ej. `GestionProductos`, `cargarProductos`, `onGuardado`).
@@ -27,7 +27,8 @@ Eres el desarrollador frontend de TiendaYa, un e-commerce de curso (Bases de Dat
 - `components/admin/FormularioProducto.vue` → alta/edición de producto, incluidas sus imágenes: hasta 10 links (`http://`/`https://`), una marcada como portada (si ninguna, la primera) y el orden de la lista. Siempre envía la lista completa de `imagenes` en el `POST /api/productos` (el backend la reemplaza entera y asigna `id_imagen`/`orden`).
 - `components/publico/FormularioCheckout.vue` → carga las direcciones del comprador con `GET /api/usuarios/<id>/direcciones` y permite crear una nueva con `POST` a la misma ruta; el checkout manda `id_direccion`.
 - Otros componentes del sitio público (`components/publico/`):
-  - `NavPublica.vue` → barra superior: búsqueda (emite `buscar`), cambio de vista catálogo/carrito y contador del carrito (`useCarrito`).
+  - `NavPublica.vue` → barra superior: búsqueda con autocompletado (emite `buscar`; prop `busquedaActual` para sincronizar el texto), cambio de vista catálogo/carrito y contador del carrito (`useCarrito`).
+  - `ResultadosBusqueda.vue` → resultados de `GET /api/busqueda` con facetas (categoría, marca, tienda, precio), orden y "¿quisiste decir?"; respaldo con aviso si el buscador responde 503.
   - `PerfilComprador.vue` → "Mi cuenta" (botón en `NavPublica.vue`, solo rol `comprador`): pedidos con total gastado (`GET /api/compradores/<id>/pedidos`), edición de perfil (`PUT /api/usuarios/<id>/perfil`) y direcciones (`GET`/`POST`/`PUT`/`DELETE /api/usuarios/<id>/direcciones[/<id_direccion>]`, máximo 3).
   - `CatalogoProductos.vue` → lista paginada de productos (`GET /api/productos` con `pagina`/`por_pagina`, que devuelve `{items, total, ...}` y no una lista; usa `components/comunes/Paginacion.vue`, con búsqueda y filtros), carga categorías y filtros por categoría (`GET /api/categorias/<id>/filtros`); usa `FiltrosCatalogo.vue` (emite `cambiar`/`limpiar`) y `TarjetaProducto.vue`.
   - `Carrito.vue` → vista del carrito (`useCarrito`) con el paso al checkout y la pantalla de compra completada.
@@ -35,19 +36,23 @@ Eres el desarrollador frontend de TiendaYa, un e-commerce de curso (Bases de Dat
   - `ResenasProducto.vue` → reseñas de un producto (`GET /api/resenas/<producto_id>`, marca "Compra verificada") y formulario para escribir una (`POST /api/resenas`), solo para sesiones con rol `comprador`. Se usa en `VistaDetalleProducto.vue`.
   - `OfertaLimitada.vue` → oferta de inventario limitado del producto (`GET /api/ofertas/<producto_id>`, "quedan X de Y"): el comprador reserva unidades (`POST .../reservar`, las aparta 1 minuto y agrega al carrito una línea "Oferta relámpago" con cuenta regresiva) y el administrador o el vendedor dueño del producto la crea (`POST /api/ofertas`, cantidad límite, precio de oferta y duración en minutos) o la elimina (`DELETE`). Se usa en `VistaDetalleProducto.vue`.
 - Otros componentes del panel admin (`components/admin/`):
-  - `SidebarAdmin.vue` → navegación por pestañas (emite `cambiar-tab`); `ventas` solo para vendedor, `categorias`/`usuarios`/`fraude` solo para administrador.
+  - `SidebarAdmin.vue` → navegación por pestañas (emite `cambiar-tab`); `ventas` solo para vendedor, `categorias`/`usuarios`/`fraude`/`sincronizacion` solo para administrador.
   - `LoginAdmin.vue` → acceso al panel (`POST /api/auth/login`).
   - `GestionProductos.vue` → catálogo paginado del panel ("Mi catálogo" para el vendedor, con `Paginacion.vue`), abre `FormularioProducto.vue`.
   - `GestionCategorias.vue` + `FormularioCategoria.vue` → lista de categorías y alta de una nueva (`POST /api/categorias`) con nombre, descripción, categoría padre opcional y `esquema_atributos` (filas `clave`/`etiqueta`/`tipo`); emite `creada`.
   - `GestionUsuarios.vue` → lista (`GET /api/usuarios`), edición (`PUT /api/usuarios/<id>`) y alta (`POST /api/auth/register`) de usuarios.
   - `GestionVentas.vue` → "Mis ventas" del vendedor (`GET /api/vendedores/<id>/ventas`).
   - `HistorialProducto.vue` → historial temporal: feed de eventos con filtros (`GET /api/historial`) y estado de un producto en una fecha (`GET /api/historial/<producto_id>`).
+  - `GestionSincronizacion.vue` → eventos del outbox del checkout (`GET /api/sincronizacion/eventos`, `POST .../procesar`, `POST .../reintentar-fallidos`, solo administrador); se refresca cada 5 s.
   - `GestionFraude.vue` → alertas de fraude en reseñas (`GET /api/fraude/alertas?rol_solicitante=...`, solo administrador): cuentas involucradas y productos compartidos, con detalle expandible por fila.
 - `components/admin/ModalAdmin.vue` → modal reutilizable (`abierto`, `titulo`, `anchoClase` props; emite `cerrar`) para formularios de alta/edición en el panel admin — úsalo en vez de crear un modal nuevo desde cero.
 
 # Modelo de datos que consume el frontend (vía la API Flask)
 - Un producto trae: `_id` (formato `PROD-XXXX`), `sku`, `nombre`, `descripcion`, `precio_base`, `categoria: {id_categoria, nombre}`, `atributos` (objeto libre, distinto por categoría — recórrelo con `Object.entries`, no asumas claves fijas), `imagenes` (array de `{id_imagen, url, es_portada, orden}`), `stock_disponible`, `vendedor`.
-- El checkout sigue operando sobre PostgreSQL (no sobre los documentos de Mongo); toma los ítems del carrito en Redis y lo vacía al confirmar. Si tocas el flujo de carrito/checkout, ten presente que el precio/stock que se cobra viene de Postgres, aunque el catálogo que se muestra viene de Mongo — pueden desincronizarse si alguien edita un producto solo desde el panel admin.
+- Buscador (Entrega 3): `NavPublica.vue` pide sugerencias a `GET /api/busqueda/autocompletar` mientras se escribe y emite `buscar` con Enter; `ResultadosBusqueda.vue` usa `GET /api/busqueda` (items + `facetas` + `sugerencia`) y, si responde 503, cae a `GET /api/productos?q=` con un aviso. `VistaPublica.vue` muestra `ResultadosBusqueda` cuando hay texto de búsqueda y `CatalogoProductos` cuando no.
+- `services/api.js`: si el servidor no responde, `apiFetch` devuelve `{ok: false, status: 0, data: {codigo: "SIN_CONEXION"}}` en vez de lanzar.
+- Checkout (Entrega 3): `FormularioCheckout.vue` manda una `clave_idempotencia` por intento de compra y **la conserva entre reintentos** (solo la renueva al confirmar). Distingue 503 (no hubo cobro), status 0 (no se sabe: reintentar es seguro), `repetido: true` (ya estaba confirmado) y `sincronizacion_pendiente` (confirmado, el catálogo se actualiza en segundos). Si `GET /api/checkout/fallas-simuladas` dice `habilitadas`, muestra el selector de falla simulada.
+- El checkout sigue operando sobre PostgreSQL (no sobre los documentos de Mongo); toma los ítems del carrito en Redis y los quita al confirmar. Si tocas el flujo de carrito/checkout, ten presente que el precio/stock que se cobra viene de Postgres, aunque el catálogo que se muestra viene de Mongo — pueden desincronizarse si alguien edita un producto solo desde el panel admin.
 
 # Cómo verificar tu trabajo
 - No hay linter configurado; para un chequeo rápido de sintaxis de un `.js` suelto puedes usar `node -c archivo.js`, pero para componentes `.vue` la única verificación real es levantar Vite.

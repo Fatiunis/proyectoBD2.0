@@ -1,15 +1,17 @@
 import json
+import re
 import uuid
 from datetime import datetime
 
 import redis
 from flask import Blueprint, request, jsonify
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 
-from .. import ofertas_redis
-from ..extensions import db, redis_client, col_productos, ZONA_GUATEMALA
-from ..models import Inventario
+from .. import ofertas_redis, sincronizacion
+from ..config import PERMITIR_FALLAS_SIMULADAS
+from ..extensions import db, redis_client, ZONA_GUATEMALA
+from ..models import CheckoutIdempotencia, EventoSincronizacion
 from .carrito import _clave_carrito
 
 bp = Blueprint("checkout", __name__)
@@ -26,52 +28,64 @@ bp = Blueprint("checkout", __name__)
 # Redis no se puede pagar con una copia vieja guardada en el cliente. Si el
 # body trae "items", se ignoran a propósito.
 #
-# Orden y fallos parciales (Redis + Postgres):
-#   1. Se lee el carrito de Redis. Si Redis falla acá -> 503 y no se toca
-#      Postgres (no hay nada que deshacer).
-#   2. Se llama al SP. Si falla -> rollback y el carrito queda intacto para
-#      que el usuario pueda reintentar.
-#   3. Tras el commit, se borra el carrito. Si ese DEL falla, el pedido YA está
-#      confirmado en Postgres: no se reporta error al cliente, solo se deja una
-#      advertencia (el carrito expirará solo por TTL).
-# Carrera conocida: si el usuario modifica el carrito entre el HGETALL y el DEL,
-# esa modificación se pierde con el DEL. Es aceptable para este flujo (el
-# checkout es la última acción del usuario sobre ese carrito).
+# ESTRATEGIA DE CONSISTENCIA (Entrega 3). Detalle completo, con cada punto de
+# falla y su mitigación, en docs/estrategia-consistencia-checkout.md. Resumen:
+#
+#   PostgreSQL es la fuente de verdad del pedido, el pago y el inventario, y
+#   la ÚNICA transacción ACID del flujo. Todo lo demás se ordena alrededor de
+#   ella, sin 2PC:
+#
+#   1. Clave de idempotencia (clave_idempotencia en el body o el header
+#      Idempotency-Key): si ya existe un pedido con esa clave, se devuelve ese
+#      mismo pedido (200, "repetido": true) sin tocar nada. Cubre el caso más
+#      peligroso: el cliente no recibe la respuesta (timeout, se cae la red) y
+#      reintenta un pago que en realidad SÍ se confirmó.
+#   2. Lectura del carrito en Redis. Antes se aplica la limpieza de carrito
+#      que haya quedado pendiente de un pedido anterior del mismo comprador,
+#      para no volver a cobrar lo que ya se pagó. Si Redis falla -> 503 y no
+#      se toca nada.
+#   3. Consumo atómico (Lua) de las reservas de oferta relámpago: pasan a
+#      "en_pago" y se descuenta el cupo. Si algo falla de aquí en adelante y
+#      antes del COMMIT, se COMPENSAN (las unidades vuelven a la oferta).
+#   4. UNA transacción en PostgreSQL: fila de idempotencia + sp_procesar_checkout
+#      (pedido, líneas, pago, inventario) + eventos de sincronización (outbox).
+#      O se confirma todo o nada. Si falla por un error de negocio (stock
+#      insuficiente, dirección ajena...) -> 400; si falla la base de datos ->
+#      503, el usuario puede reintentar con la misma clave sin riesgo.
+#   5. Después del COMMIT el pedido es válido pase lo que pase. Lo que queda
+#      en otros motores (cerrar reservas y limpiar el carrito en Redis, copiar
+#      el stock a MongoDB y a Elasticsearch) son eventos del outbox: se
+#      intentan de inmediato y, si fallan, el relevo de app/sincronizacion.py
+#      los reintenta con espera creciente. Todos son idempotentes. El cliente
+#      recibe 201 igual, con "sincronizacion_pendiente": true si quedó algo.
 #
 # Líneas de oferta relámpago (campo "oferta:{pid}" del carrito):
 #   - Se mandan al SP como {"id_producto", "cantidad", "precio_unitario"}.
 #     Cantidad y precio salen de la RESERVA en Redis (oferta:{pid}:reservas),
 #     no de la línea del carrito: la línea es solo una copia para mostrar.
-#   - Antes del SP, cada reserva se CONSUME con consumir_reserva_oferta.lua:
-#     comprueba (con el reloj de Redis) que exista y no haya vencido, la pasa
-#     a "en_pago" y descuenta sus unidades del cupo sin vender, todo atómico.
-#     Como una reserva solo se crea si cabe en cupo_sin_vender - activas, y el
-#     consumo resta del cupo lo mismo que quita de "activas", el cupo nunca
-#     queda negativo: no hay sobreventa aunque haya muchos checkouts a la vez.
-#     Un segundo checkout simultáneo del mismo usuario encuentra la reserva
-#     "en_pago" y se rechaza (409), así la misma reserva no se paga dos veces.
+#   - consumir_reserva_oferta.lua comprueba (con el reloj de Redis) que la
+#     reserva exista y no haya vencido, la pasa a "en_pago" y descuenta sus
+#     unidades del cupo sin vender, todo atómico. Un segundo checkout
+#     simultáneo del mismo usuario encuentra la reserva "en_pago" y se rechaza
+#     (409), así la misma reserva no se paga dos veces.
 #   - Si alguna reserva ya venció: se compensan las que sí se consumieron, se
-#     quitan del carrito las vencidas y se responde 409
-#     RESERVA_OFERTA_EXPIRADA sin llamar al SP.
-#   - La reserva se respeta aunque la ventana de la oferta termine dentro de
-#     su minuto: precio y cantidad viajan en la reserva.
-#
-# Fallos parciales Redis <-> Postgres (no hay 2PC; el orden los acota):
-#   a. Falla Redis al consumir -> 503; se intentan compensar los consumos ya
-#      hechos y no se toca Postgres.
-#   b. Falla el SP -> rollback en Postgres y se COMPENSA cada consumo: las
-#      unidades vuelven al cupo (si la misma oferta sigue viva) y la reserva
-#      vuelve a "activa" con su vencimiento original (si no ha pasado).
-#   c. El SP confirma -> las reservas se cierran (quedan como vendidas) y se
-#      borra el carrito. Si Redis falla aquí el pedido YA es válido: solo se
-#      registra una advertencia; la entrada "en_pago" se purga sola tras
-#      ofertas_redis.MARGEN_PAGO_MS y sus unidades siguen contando como
-#      vendidas, que es lo correcto.
-#   d. Si el proceso muere entre consumir y confirmar/compensar, la entrada
-#      "en_pago" también se purga tras el margen y sus unidades quedan como
-#      vendidas: se prefiere dejar alguna unidad sin vender antes que sobrevender.
-#   e. Si falla la compensación (Redis caído justo tras el fallo del SP), las
-#      unidades se pierden para esta oferta (mismo criterio conservador).
+#     quitan del carrito las vencidas y se responde 409 RESERVA_OFERTA_EXPIRADA
+#     sin llamar al SP.
+#   - Si el proceso muere entre consumir y confirmar/compensar, la entrada
+#     "en_pago" se purga tras ofertas_redis.MARGEN_PAGO_MS y sus unidades
+#     quedan como vendidas: se prefiere dejar alguna unidad sin vender antes
+#     que sobrevender.
+
+PATRON_CLAVE_IDEMPOTENCIA = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+# Fallas simuladas para la prueba de falla (solo con PERMITIR_FALLAS_SIMULADAS=1).
+PUNTOS_DE_FALLA = {
+    "redis_lectura_carrito": "Redis no responde al leer el carrito (antes de tocar nada).",
+    "postgres_antes_commit": "PostgreSQL se cae después de ejecutar el procedimiento y antes del COMMIT.",
+    "redis_post_commit": "Redis no responde después de confirmar el pedido (cerrar reservas y limpiar el carrito).",
+    "mongo_post_commit": "MongoDB no responde al copiar el stock después de confirmar el pedido.",
+    "elasticsearch_post_commit": "Elasticsearch no responde al copiar el stock después de confirmar el pedido.",
+}
 
 
 def _generar_referencia_pago():
@@ -95,6 +109,49 @@ def _compensar_consumos(id_comprador, consumos):
                   f"{consumo['producto_id']} del usuario {id_comprador}: {e}")
 
 
+def _falla_simulada(data):
+    """Punto de falla pedido en el body, solo si las fallas simuladas están
+    habilitadas en el .env; en cualquier otro caso se ignora."""
+    punto = data.get("simular_falla")
+    if PERMITIR_FALLAS_SIMULADAS and punto in PUNTOS_DE_FALLA:
+        print(f"[checkout] FALLA SIMULADA activa: {punto}")
+        return punto
+    return None
+
+
+def _respuesta_repetida(registro):
+    """Respuesta a un reintento de un checkout que ya se había confirmado.
+    Aprovecha para reintentar los eventos pendientes de ese pedido (por
+    ejemplo, limpiar el carrito si Redis había fallado la primera vez)."""
+    pendientes = [
+        e.id_evento for e in db.session.query(EventoSincronizacion.id_evento)
+        .filter_by(id_pedido=registro.id_pedido, estado="pendiente").all()
+    ]
+    resumen = {"procesados": 0, "pendientes": 0}
+    try:
+        resumen = sincronizacion.procesar(ids=pendientes)
+    except Exception as e:
+        db.session.rollback()
+        print(f"[checkout] ADVERTENCIA: no se pudieron reintentar los eventos del pedido {registro.id_pedido}: {e}")
+    return jsonify({
+        "mensaje": "Este pedido ya se había confirmado; no se volvió a cobrar.",
+        "id_pedido": registro.id_pedido,
+        "referencia_pago": registro.referencia_pago,
+        "repetido": True,
+        "sincronizacion_pendiente": resumen.get("pendientes", 0) > 0,
+    }), 200
+
+
+@bp.route("/api/checkout/fallas-simuladas", methods=["GET"])
+def fallas_simuladas():
+    """Le dice al frontend si puede ofrecer el selector de falla simulada."""
+    return jsonify({
+        "habilitadas": PERMITIR_FALLAS_SIMULADAS,
+        "puntos": [{"punto": k, "descripcion": v} for k, v in PUNTOS_DE_FALLA.items()]
+        if PERMITIR_FALLAS_SIMULADAS else [],
+    })
+
+
 @bp.route("/api/checkout", methods=["POST"])
 def procesar_checkout():
     data = request.get_json(silent=True) or {}
@@ -103,16 +160,77 @@ def procesar_checkout():
     metodo_pago = data.get("metodo_pago")
     # La referencia de pago la genera SIEMPRE el backend; si el cliente manda
     # "referencia_pago" se ignora a propósito.
+    clave_idempotencia = data.get("clave_idempotencia") or request.headers.get("Idempotency-Key")
+    falla = _falla_simulada(data)
 
     if not all([id_comprador, id_direccion, metodo_pago]):
         return jsonify({"error": "id_comprador, id_direccion y metodo_pago son obligatorios"}), 400
+    if clave_idempotencia is not None and not (
+        isinstance(clave_idempotencia, str) and PATRON_CLAVE_IDEMPOTENCIA.match(clave_idempotencia)
+    ):
+        return jsonify({"error": "clave_idempotencia debe tener entre 8 y 64 caracteres (letras, números, - o _)"}), 400
+
+    # ---- 1. ¿Es un reintento de un pago ya confirmado? ---------------------
+    if clave_idempotencia:
+        try:
+            registro = db.session.get(CheckoutIdempotencia, clave_idempotencia)
+        except Exception as e:
+            db.session.rollback()
+            print(f"[checkout] ADVERTENCIA: no se pudo consultar la clave de idempotencia: {e}")
+            return jsonify({
+                "error": "No pudimos procesar tu pago en este momento. No se realizó ningún cobro; intenta de nuevo.",
+                "codigo": "SERVICIO_NO_DISPONIBLE",
+            }), 503
+        if registro is not None:
+            if registro.id_comprador != id_comprador:
+                return jsonify({"error": "La clave de idempotencia pertenece a otro comprador",
+                                "codigo": "CLAVE_IDEMPOTENCIA_AJENA"}), 409
+            return _respuesta_repetida(registro)
+        db.session.rollback()
 
     clave = _clave_carrito(id_comprador)
 
+    # ---- 2. Carrito en Redis -------------------------------------------------
+    # Si un pedido anterior de este comprador dejó pendiente la limpieza de su
+    # carrito (Redis falló justo después del COMMIT), se aplica ANTES de leer:
+    # si no, lo que ya se pagó seguiría en el carrito y un nuevo checkout (con
+    # otra clave de idempotencia, p. ej. tras recargar la página) lo cobraría
+    # otra vez.
     try:
+        limpiezas = [
+            e.id_evento for e in db.session.query(EventoSincronizacion.id_evento).filter(
+                EventoSincronizacion.estado == "pendiente",
+                EventoSincronizacion.tipo == "limpiar_carrito",
+                EventoSincronizacion.payload["id_comprador"].astext == str(id_comprador),
+            ).all()
+        ]
+        if limpiezas:
+            r = sincronizacion.procesar(ids=limpiezas)
+            if r["pendientes"] or r["fallidos"]:
+                return jsonify({
+                    "error": "Todavía estamos terminando de registrar tu compra anterior. "
+                             "Intenta de nuevo en unos segundos; no se realizó ningún cobro.",
+                    "codigo": "CARRITO_NO_DISPONIBLE",
+                }), 503
+        else:
+            db.session.rollback()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[checkout] ADVERTENCIA: no se pudo revisar la limpieza pendiente del carrito de {id_comprador}: {e}")
+        return jsonify({
+            "error": "No pudimos procesar tu pago en este momento. No se realizó ningún cobro; intenta de nuevo.",
+            "codigo": "SERVICIO_NO_DISPONIBLE",
+        }), 503
+
+    try:
+        if falla == "redis_lectura_carrito":
+            raise redis.exceptions.ConnectionError("Falla simulada: Redis no responde")
         crudo = redis_client.hgetall(clave)
     except redis.exceptions.RedisError:
-        return jsonify({"error": "No se pudo leer el carrito (Redis no disponible)"}), 503
+        return jsonify({
+            "error": "No pudimos leer tu carrito en este momento. No se realizó ningún cobro; intenta de nuevo en unos segundos.",
+            "codigo": "CARRITO_NO_DISPONIBLE",
+        }), 503
 
     if not crudo:
         return jsonify({
@@ -143,7 +261,7 @@ def procesar_checkout():
 
         items.append({"id_producto": id_sql_origen, "cantidad": item.get("cantidad")})
 
-    # ---- Consumo atómico de las reservas de oferta (antes del SP) ----------
+    # ---- 3. Consumo atómico de las reservas de oferta (antes del SP) ----------
     consumos = []
     expiradas = []   # (producto_id, nombre)
     en_pago = []     # nombres con otro checkout en curso
@@ -164,7 +282,10 @@ def procesar_checkout():
                 })
     except redis.exceptions.RedisError:
         _compensar_consumos(id_comprador, consumos)
-        return jsonify({"error": "No se pudo reservar el pago de la oferta (Redis no disponible)"}), 503
+        return jsonify({
+            "error": "No pudimos apartar tu oferta en este momento. No se realizó ningún cobro; intenta de nuevo.",
+            "codigo": "CARRITO_NO_DISPONIBLE",
+        }), 503
 
     if expiradas or en_pago:
         _compensar_consumos(id_comprador, consumos)
@@ -191,7 +312,35 @@ def procesar_checkout():
 
     referencia_pago = _generar_referencia_pago()
 
+    # ---- 4. Una sola transacción en PostgreSQL -------------------------------
+    # 4a. La clave de idempotencia va primero: si otra petición con la misma
+    # clave está en curso, este INSERT espera a que termine (índice único) y
+    # luego falla, en vez de cobrar dos veces.
+    if clave_idempotencia:
+        try:
+            db.session.add(CheckoutIdempotencia(clave=clave_idempotencia, id_comprador=id_comprador))
+            db.session.flush()
+        except IntegrityError as e:
+            db.session.rollback()
+            _compensar_consumos(id_comprador, consumos)
+            restriccion = getattr(getattr(e.orig, "diag", None), "constraint_name", None)
+            if restriccion != "checkout_idempotencia_pkey":
+                return jsonify({"error": f"El usuario comprador {id_comprador} no existe"}), 400
+            registro = db.session.get(CheckoutIdempotencia, clave_idempotencia)
+            if registro is not None and registro.id_comprador == id_comprador:
+                return _respuesta_repetida(registro)
+            return jsonify({"error": "Ya hay un pago en curso con esta clave", "codigo": "PAGO_EN_CURSO"}), 409
+        except Exception as e:
+            db.session.rollback()
+            _compensar_consumos(id_comprador, consumos)
+            print(f"[checkout] ADVERTENCIA: no se pudo registrar la clave de idempotencia: {e}")
+            return jsonify({
+                "error": "No pudimos procesar tu pago en este momento. No se realizó ningún cobro; intenta de nuevo.",
+                "codigo": "PAGO_NO_CONFIRMADO",
+            }), 503
+
     try:
+        # 4b. Pedido, líneas, pago e inventario (sp_procesar_checkout).
         resultado = db.session.execute(
             text(
                 "CALL sp_procesar_checkout("
@@ -207,8 +356,46 @@ def procesar_checkout():
             },
         )
         id_pedido, mensaje = resultado.fetchone()
+
+        if falla == "postgres_antes_commit":
+            raise OperationalError("COMMIT", {}, Exception("Falla simulada: se perdió la conexión con PostgreSQL"))
+
+        # 4c. Clave de idempotencia apuntando al pedido.
+        if clave_idempotencia:
+            registro = db.session.get(CheckoutIdempotencia, clave_idempotencia)
+            registro.id_pedido = id_pedido
+            registro.referencia_pago = referencia_pago
+
+        # 4d. Outbox: lo que hay que hacer en los otros motores tras confirmar.
+        eventos = []
+        for consumo in consumos:
+            eventos.append(sincronizacion.registrar("confirmar_reserva_oferta", {
+                "producto_id": consumo["producto_id"],
+                "id_usuario": id_comprador,
+                "id_oferta": consumo["id_oferta"],
+            }, id_pedido))
+        eventos.append(sincronizacion.registrar("limpiar_carrito", {
+            "id_comprador": id_comprador,
+            "lineas": crudo,
+        }, id_pedido))
+        for id_sql_origen in sorted({it["id_producto"] for it in items}):
+            eventos.append(sincronizacion.registrar("stock_mongo", {"id_sql_origen": id_sql_origen}, id_pedido))
+            eventos.append(sincronizacion.registrar("stock_elasticsearch", {"id_sql_origen": id_sql_origen}, id_pedido))
+
         db.session.commit()
+    except OperationalError as e:
+        # La base de datos no respondió o se cortó la conexión: no se confirmó
+        # nada. Es un error de infraestructura (reintentable), no de negocio.
+        db.session.rollback()
+        _compensar_consumos(id_comprador, consumos)
+        print(f"[checkout] ERROR: PostgreSQL no confirmó el pedido: {e}")
+        return jsonify({
+            "error": "No pudimos confirmar tu pago. No se realizó ningún cobro y tu carrito sigue intacto; intenta de nuevo.",
+            "codigo": "PAGO_NO_CONFIRMADO",
+        }), 503
     except DBAPIError as e:
+        # Error de negocio levantado por el SP (stock insuficiente, dirección
+        # ajena, producto inactivo...): el mensaje del SP es para el usuario.
         db.session.rollback()
         _compensar_consumos(id_comprador, consumos)
         diag = getattr(e.orig, "diag", None)
@@ -219,41 +406,26 @@ def procesar_checkout():
         _compensar_consumos(id_comprador, consumos)
         return jsonify({"error": f"Error en base de datos: {str(e)}"}), 500
 
-    for consumo in consumos:
-        try:
-            ofertas_redis.confirmar(id_comprador, consumo)
-        except Exception as e:
-            print(f"[checkout] ADVERTENCIA: pedido {id_pedido} confirmado, pero no se pudo cerrar la "
-                  f"reserva de {consumo['producto_id']} en Redis (se purgará sola): {e}")
-
+    # ---- 5. Pedido confirmado: sincronización inmediata (mejor esfuerzo) -----
+    # Lo que falle aquí queda "pendiente" en el outbox y lo reintenta el relevo;
+    # el pedido ya es válido y el cliente recibe 201 igual.
+    ids_eventos = [e.id_evento for e in eventos]
+    resumen = {"procesados": 0, "pendientes": len(ids_eventos)}
     try:
-        redis_client.delete(clave)
+        resumen = sincronizacion.procesar(ids=ids_eventos, falla_simulada=falla)
+        for err in resumen["errores"]:
+            print(f"[checkout] ADVERTENCIA: pedido {id_pedido} confirmado; evento {err['id_evento']} "
+                  f"({err['tipo']}) quedó pendiente: {err['error']}")
     except Exception as e:
-        print(f"[checkout] ADVERTENCIA: pedido {id_pedido} confirmado, pero no se pudo borrar {clave} en Redis: {e}")
+        db.session.rollback()
+        print(f"[checkout] ADVERTENCIA: pedido {id_pedido} confirmado, pero no se pudieron procesar sus "
+              f"eventos de sincronización (los reintentará el relevo): {e}")
 
-    # Espejo "mejor esfuerzo" del stock hacia Mongo: el pedido ya está confirmado en
-    # Postgres, esto es solo para que GET /api/productos/<id> no muestre un stock viejo.
-    # Se lee de Postgres (no se resta en memoria) porque entre el commit del SP y este
-    # bloque pueden haberse confirmado otros checkouts concurrentes sobre el mismo
-    # producto; una lectura fresca post-commit siempre refleja el valor real.
-    ids_comprados = [it["id_producto"] for it in items]
-    try:
-        filas_inventario = (
-            db.session.query(Inventario.id_producto, Inventario.stock_disponible)
-            .filter(Inventario.id_producto.in_(ids_comprados))
-            .all()
-        )
-        for id_producto, stock_actual in filas_inventario:
-            try:
-                col_productos.update_one(
-                    {"id_sql_origen": id_producto},
-                    {"$set": {"stock_disponible": stock_actual}},
-                )
-            except Exception as e:
-                print(f"[checkout] ADVERTENCIA: pedido {id_pedido} confirmado, pero no se pudo "
-                      f"sincronizar el stock Mongo del producto {id_producto}: {e}")
-    except Exception as e:
-        print(f"[checkout] ADVERTENCIA: pedido {id_pedido} confirmado, pero no se pudo leer el "
-              f"stock actualizado de Postgres para sincronizar Mongo: {e}")
-
-    return jsonify({"mensaje": mensaje, "id_pedido": id_pedido, "referencia_pago": referencia_pago}), 201
+    pendientes = resumen.get("pendientes", 0) + resumen.get("fallidos", 0)
+    return jsonify({
+        "mensaje": mensaje,
+        "id_pedido": id_pedido,
+        "referencia_pago": referencia_pago,
+        "sincronizacion_pendiente": pendientes > 0,
+        "eventos_sincronizacion": {"procesados": resumen.get("procesados", 0), "pendientes": pendientes},
+    }), 201

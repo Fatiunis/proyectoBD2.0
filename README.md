@@ -6,10 +6,40 @@ Portal de comercio electrónico con arquitectura de datos políglota (proyecto d
 - **MongoDB**: catálogo de productos (atributos polimórficos por categoría), historial de cambios (event sourcing) y reseñas de producto.
 - **Redis**: carrito de compra (expira por inactividad) y la oferta de inventario limitado (reserva atómica, sin sobreventa bajo concurrencia).
 - **Neo4j**: grafo de reseñas para detectar fraude (cuentas que se califican entre sí de forma reiterada sobre los mismos productos).
+- **Elasticsearch**: buscador del catálogo (tolerancia a errores de tipeo, sinónimos, autocompletado, relevancia y filtros facetados), alimentado desde MongoDB.
+- **Consistencia del checkout**: una transacción en PostgreSQL con clave de idempotencia y un *outbox* de eventos que se reintentan hacia Redis, MongoDB y Elasticsearch ([estrategia](docs/estrategia-consistencia-checkout.md)).
 - **Backend**: Flask con application factory (`backend/main.py` → `backend/app/create_app()`), organizado en **Blueprints** por dominio y **SQLAlchemy** para todo el acceso a PostgreSQL. Expone una API REST consumida por el frontend.
-- **Frontend**: **Vue 3 + Vite + Tailwind v4** (`frontend/app/`) — sitio público (catálogo paginado, carrito, checkout, reseñas, oferta límite, "Mi cuenta" del comprador) y panel admin (catálogo, categorías, usuarios, ventas, historial, fraude).
+- **Frontend**: **Vue 3 + Vite + Tailwind v4** (`frontend/app/`) — sitio público (catálogo paginado, carrito, checkout, reseñas, oferta límite, "Mi cuenta" del comprador, buscador con facetas) y panel admin (catálogo, categorías, usuarios, ventas, historial, fraude, sincronización).
 
-## Novedades de la Entrega 2 (léelo si ya tenías el proyecto montado de antes)
+## Novedades de la Entrega 3 (léelo si ya tenías el proyecto montado de antes)
+
+Si ya tenías TiendaYa corriendo de la Entrega 2, esto es lo que necesitas hacer para ponerte al día:
+
+1. **`git pull`** (trae Elasticsearch en `docker-compose.yml`, los módulos nuevos del backend y los scripts).
+2. **Reinstala dependencias de Python**: `pip install -r requirements.txt` (agrega `elasticsearch`).
+3. **Agrega las variables nuevas a tu `.env`**: `ELASTICSEARCH_URL` y, si quieres probar las fallas simuladas, `PERMITIR_FALLAS_SIMULADAS=1` (ver el [paso 2](#2-variables-de-entorno)).
+4. **Aplica la migración de la Entrega 3** sobre tu base existente (crea dos tablas nuevas, no toca datos):
+   ```bash
+   psql -U postgres -d tiendaya_db -f database/postgres/migracion_entrega3_consistencia.sql
+   ```
+5. **Levanta Elasticsearch e indexa el catálogo** ([paso 5](#5-levantar-redis-neo4j-y-elasticsearch-y-sembrar-los-datos)):
+   ```bash
+   docker compose up -d
+   python database/migrations/indexar_productos_elasticsearch.py
+   ```
+6. Reinicia el backend (`python backend/main.py`). Al arrancar tiene que decir `[relevo] Relevo de eventos de sincronización activo`.
+
+Qué se construyó, en concreto:
+- **Buscador con Elasticsearch**: al escribir en la barra de búsqueda aparece un **autocompletado** (con flechas ↑/↓ y Enter). Al presionar Enter se abre la página de resultados, ordenada por **relevancia**. Esa página tolera **errores de tipeo** ("laptp" encuentra laptops), entiende **sinónimos** ("portátil", "auriculares", "smartphone"), ofrece **"¿Quisiste decir…?"** y tiene **filtros facetados** por categoría, marca, tienda y rango de precio, calculados con agregaciones del motor (con el conteo de cada opción). Se puede ordenar por precio. Si Elasticsearch no está disponible, la búsqueda cae a la de MongoDB y muestra un aviso de "búsqueda simplificada". API: `GET /api/busqueda` y `GET /api/busqueda/autocompletar` (blueprint `busqueda.py`). El índice tiene un mapping propio ([`database/elasticsearch/productos_indice.json`](database/elasticsearch/productos_indice.json)) explicado en [ADR-004](docs/decisiones/ADR-004-motor-de-busqueda.md). Guardar un producto desde el admin lo reindexa solo.
+- **Checkout con estrategia de consistencia**: [`docs/estrategia-consistencia-checkout.md`](docs/estrategia-consistencia-checkout.md) explica cada punto de falla y su mitigación. En resumen:
+  - **Clave de idempotencia**: el frontend manda una por intento de compra. Si el cliente reintenta un pago que sí se había confirmado (por ejemplo, porque se perdió la respuesta), el backend devuelve el mismo pedido (`200`, `"repetido": true`) en vez de cobrar otra vez.
+  - **Outbox**: en la misma transacción que el pedido se guardan los eventos de lo que hay que hacer después en los otros motores: limpiar el carrito y cerrar reservas en Redis, y copiar el stock a MongoDB y a Elasticsearch. Se ejecutan al instante; si un motor falla, un **relevo** (hilo en el backend, cada 15 s) los reintenta con espera creciente. Todos son idempotentes. Esto reemplaza las copias de "mejor esfuerzo" de antes, que, si fallaban, dejaban el stock de Mongo mal para siempre.
+  - **Mensajes claros**: si algo falla antes de cobrar, el comprador ve "No se realizó ningún cobro y tu carrito sigue intacto" y un botón **Reintentar compra**. Si se perdió la conexión, ve que reintentar es seguro.
+- **Fallas simuladas** (solo desarrollo, con `PERMITIR_FALLAS_SIMULADAS=1`): el checkout muestra un selector "Simular falla" para provocar que Redis, PostgreSQL, MongoDB o Elasticsearch fallen en distintos puntos del flujo. La prueba automática está en `backend/scripts/prueba_fallas_checkout.py` (45/45 verificaciones, [evidencia](docs/evidencia/prueba_fallas_checkout.txt)) y la del buscador en `backend/scripts/prueba_buscador.py` (21/21, [evidencia](docs/evidencia/prueba_buscador.txt)).
+- **Panel admin → Sincronización** (solo administrador): eventos del outbox pendientes, procesados y fallidos, con su último error, más botones para procesarlos ya o volver a encolar los fallidos.
+- **Documentación nueva**: [`docs/estrategia-consistencia-checkout.md`](docs/estrategia-consistencia-checkout.md), [ADR-004](docs/decisiones/ADR-004-motor-de-busqueda.md) (por qué Elasticsearch y cómo se diseñó el índice), [ADR-005](docs/decisiones/ADR-005-newsql-pagos.md) (evaluación NewSQL para pagos: no migrar, y cuándo sí), [`docs/arquitectura.md`](docs/arquitectura.md) (diagrama actualizado) y [`docs/informe-entrega-3.md`](docs/informe-entrega-3.md).
+
+## Novedades de la Entrega 2
 
 Si ya tenías TiendaYa corriendo de una entrega anterior, esto es lo que se agregó y lo que necesitas hacer para ponerte al día — no es opcional, el backend no arranca bien sin Redis/Neo4j configurados:
 
@@ -35,7 +65,7 @@ Qué se construyó, en concreto:
   - **Editar perfil**: nombre, teléfono y cambio de contraseña. Para cambiarla hay que escribir la actual, y la nueva debe tener al menos 8 caracteres (`PUT /api/usuarios/<id_usuario>/perfil`).
   - **Mis direcciones**: agregar, editar, marcar como principal y eliminar direcciones (`PUT`/`DELETE /api/usuarios/<id_usuario>/direcciones/<id_direccion>`). **Máximo 3 por usuario**: la cuarta responde `409`, también desde el checkout. Si eliminas la principal, la más antigua de las que quedan pasa a serlo. Una dirección que ya se usó en un pedido no se puede eliminar (`409`), porque el pedido la referencia.
 - **Catálogo paginado**: con más de 1000 productos, el catálogo público y la pestaña Catálogo del admin muestran 24 productos por página, con botones "Anterior"/"Siguiente". **Cambió el formato de `GET /api/productos`**: acepta `pagina` y `por_pagina` (24 por defecto, máximo 100) y ya no devuelve una lista, sino `{items, total, pagina, por_pagina, total_paginas}`. Hay un índice nuevo en Mongo (`idx_activo_precio`) para la vista "Todas las categorías": créalo con el comando del [paso 4](#4-migrar-el-catálogo-a-mongodb).
-- **Stock sincronizado entre PostgreSQL y MongoDB** (mejor esfuerzo): al confirmar una compra, el backend copia a Mongo el stock que quedó en Postgres, así la página del producto ya no muestra un stock viejo. Al editar el stock de un producto desde el admin, el cambio también se escribe en el `inventario` de Postgres, que es el que usa el checkout. Si alguna de las dos copias falla, la operación principal (el pedido o la edición en Mongo) igual queda hecha y solo se registra una advertencia en el log del backend.
+- **Stock sincronizado entre PostgreSQL y MongoDB**: al confirmar una compra, el backend copia a Mongo el stock que quedó en Postgres, así la página del producto ya no muestra un stock viejo. Desde la Entrega 3 esta copia pasa por el outbox, con reintentos (y también llega a Elasticsearch). Al editar el stock de un producto desde el admin, el cambio también se escribe en el `inventario` de Postgres, que es el que usa el checkout (mejor esfuerzo: si falla, la edición en Mongo igual queda hecha y solo se registra una advertencia).
 - **Documentación nueva**: [`docs/decisiones/ADR-002-grafos-vs-columnar.md`](docs/decisiones/ADR-002-grafos-vs-columnar.md) (por qué Neo4j y no Cassandra), [`docs/decisiones/ADR-003-redis-carrito-y-oferta.md`](docs/decisiones/ADR-003-redis-carrito-y-oferta.md) (por qué Redis para el carrito y la oferta), [`docs/arquitectura.md`](docs/arquitectura.md) (diagrama actualizado) y [`docs/informe-entrega-2.md`](docs/informe-entrega-2.md) (informe de la entrega).
 
 ## Estado del proyecto
@@ -46,14 +76,19 @@ Qué se construyó, en concreto:
 
 **Migración a frameworks** — completa: backend en Blueprints + SQLAlchemy, frontend migrado por completo a Vue 3 + Vite. El sitio HTML/JS vanilla original ya se retiró del repositorio. Detalle en [`docs/STACK.md`](docs/STACK.md).
 
-**Entrega 2** — completa: carrito y oferta de inventario limitado sobre Redis, sistema de reseñas y detección de fraude sobre Neo4j (ver sección de arriba). Bitácora completa de qué se hizo, por qué, y qué se verificó en [`docs/STACK.md`](docs/STACK.md).
+**Entrega 2** — completa: carrito y oferta de inventario limitado sobre Redis, sistema de reseñas y detección de fraude sobre Neo4j. Bitácora completa de qué se hizo, por qué, y qué se verificó en [`docs/STACK.md`](docs/STACK.md).
+
+**Entrega 3** — completa: buscador sobre Elasticsearch (tolerancia a errores, autocompletado, facetas), estrategia de consistencia del checkout (idempotencia, compensación y outbox con reintentos) con prueba de falla simulada, y evaluación NewSQL para pagos (ver "Novedades de la Entrega 3" arriba e informe en [`docs/informe-entrega-3.md`](docs/informe-entrega-3.md)).
 
 **Informe de la Entrega 1:** [`docs/Entrega 1 Base de Datos 2 (1).pdf`](<docs/Entrega 1 Base de Datos 2 (1).pdf>) (diagrama entidad-relación, justificación de la normalización y decisiones de embeber/referenciar).
 
 **Pendiente (documentación, no código):** explicar cómo `lineas_pedido` (PostgreSQL) referencia productos que ahora viven en MongoDB (vía el campo `id_sql_origen`).
 
 **Limitaciones conocidas:**
-- El checkout opera sobre `productos`/`inventario` de PostgreSQL, no sobre MongoDB. Del catálogo, solo el **stock** se sincroniza entre los dos motores, y es de mejor esfuerzo (ver "Stock sincronizado" arriba). El resto de lo que se edita desde el admin (**precio**, nombre, descripción, atributos) queda solo en Mongo: el checkout sigue cobrando el precio de Postgres.
+- El checkout opera sobre `productos`/`inventario` de PostgreSQL, no sobre MongoDB. Del catálogo, solo el **stock** se sincroniza entre los motores (tras una compra, por el outbox con reintentos; al editarlo en el admin, de mejor esfuerzo). El resto de lo que se edita desde el admin (**precio**, nombre, descripción, atributos) queda solo en Mongo y Elasticsearch: el checkout sigue cobrando el precio de Postgres.
+- El stock que muestran el catálogo y el buscador puede tener unos segundos de atraso si MongoDB o Elasticsearch fallaron después de una compra (consistencia eventual; el relevo lo corrige solo). El checkout nunca vende de más por eso, porque valida contra PostgreSQL.
+- El relevo del outbox es un hilo dentro del backend: si Flask está detenido, nadie reintenta (los eventos quedan guardados y se procesan al volver). Un evento que falla 10 veces queda `fallido` y se vuelve a encolar desde el panel admin → Sincronización.
+- Elasticsearch y Redis corren sin autenticación, y Neo4j solo con su usuario por defecto (el control de acceso es tema de la entrega final).
 - La oferta de inventario limitado (cupo, precio y reservas) vive en Redis. Es un cupo aparte del inventario real, pero al confirmar la compra las unidades vendidas en oferta **sí** se descuentan del `inventario` de PostgreSQL, igual que una compra normal.
 - El precio de oferta se valida al crearla contra el `precio_base` de MongoDB, y en el checkout contra el de PostgreSQL. Si un producto se editó solo en Mongo y los dos precios no coinciden, una oferta que se creó sin problema puede fallar al pagar. En ese caso el checkout devuelve las unidades a la oferta.
 - La sincronización de una reseña hacia Neo4j es de mejor esfuerzo (sin 2PC): si Neo4j no está disponible al crear la reseña, esta igual queda guardada en Mongo y solo se registra una advertencia en el log del backend.
@@ -65,7 +100,7 @@ Qué se construyó, en concreto:
 - PostgreSQL corriendo localmente (o accesible por red)
 - MongoDB corriendo localmente (o accesible por red)
 - Node.js `^20.19.0` o `>=22.12.0` + npm (requerido por Vite para levantar el frontend)
-- **Docker + Docker Compose** (para levantar Redis y Neo4j — requerido desde la Entrega 2)
+- **Docker + Docker Compose** (para levantar Redis, Neo4j y Elasticsearch). Elasticsearch usa unos 1-1.5 GB de RAM (heap de 512 MB más la propia JVM)
 
 ## Instalación
 
@@ -109,6 +144,14 @@ RESERVA_OFERTA_TTL_SEGUNDOS=60
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=tiendaya123
+
+ELASTICSEARCH_URL=http://localhost:9200
+ES_ALIAS_PRODUCTOS=productos
+# Cada cuántos segundos se reintentan los eventos pendientes del checkout, y cuántos intentos antes de marcarlos "fallido"
+OUTBOX_INTERVALO_SEGUNDOS=15
+OUTBOX_MAX_INTENTOS=10
+# 1 = el checkout acepta fallas simuladas (solo desarrollo y para la prueba de falla); 0 en cualquier otro caso
+PERMITIR_FALLAS_SIMULADAS=0
 ```
 
 `.env` está en `.gitignore` — nunca lo subas al repositorio.
@@ -131,6 +174,12 @@ psql -U postgres -d tiendaya_db -f database/postgres/ddl_tiendaya.sql
 
 ```bash
 psql -U postgres -d tiendaya_db -f database/postgres/migracion_sp_checkout_precio_oferta.sql
+```
+
+Y la de la Entrega 3, que crea las tablas `checkout_idempotencia` y `eventos_sincronizacion` (el DDL ya las trae para una base nueva; esta migración es para bases existentes, no toca datos y se puede repetir):
+
+```bash
+psql -U postgres -d tiendaya_db -f database/postgres/migracion_entrega3_consistencia.sql
 ```
 
 Carga los 11 productos adicionales de la semilla (15 en total):
@@ -205,7 +254,7 @@ Las imágenes no son archivos del repositorio: cada producto guarda en Mongo una
 - **Las imágenes cargadas desde el panel viven solo en Mongo** (no están en `IMAGENES_POR_SKU` ni en Postgres), así que no les llegan a los demás por `git pull`.
 - Ojo: la migración completa (sin `--incremental`) **borra y recrea** `productos` e `historial_cambios_productos`, así que se pierden las ediciones hechas desde el admin (incluidas las imágenes cargadas desde el panel: el producto se vuelve a crear desde Postgres con la foto genérica de su categoría o sin imagen) y el historial local. El modo `--incremental` no toca los documentos que ya existen, así que las conserva.
 
-### 5. Levantar Redis y Neo4j, y sembrar los datos de la Entrega 2
+### 5. Levantar Redis, Neo4j y Elasticsearch, y sembrar los datos
 
 Desde la raíz del repo:
 
@@ -213,7 +262,21 @@ Desde la raíz del repo:
 docker compose up -d
 ```
 
-Levanta Redis (puerto `6379`, usado por el carrito y la oferta de inventario limitado) y Neo4j (puertos `7474` browser / `7687` bolt, usuario `neo4j` / contraseña `tiendaya123` — usado por la detección de fraude en reseñas). Dale unos 15-20 segundos a Neo4j antes de seguir, tarda más que Redis en quedar listo (puedes verificar con `docker compose logs neo4j` hasta ver `Started.`).
+Levanta tres servicios:
+
+- **Redis** (puerto `6379`): carrito y oferta de inventario limitado.
+- **Neo4j** (puertos `7474` browser / `7687` bolt, usuario `neo4j` / contraseña `tiendaya123`): detección de fraude en reseñas.
+- **Elasticsearch** (puerto `9200`): buscador del catálogo.
+
+Dale unos 20-40 segundos a Neo4j y a Elasticsearch antes de seguir, tardan más que Redis en quedar listos. Puedes verificarlo con `docker compose ps` (Elasticsearch aparece `healthy`) o con `curl http://localhost:9200`.
+
+Indexa el catálogo de MongoDB en Elasticsearch (necesita el paso 4 hecho). Crea un índice nuevo, verifica que tenga la misma cantidad de productos que Mongo y recién entonces mueve el alias `productos` hacia él, así que es seguro correrlo las veces que haga falta, incluso con el backend andando:
+
+```bash
+python database/migrations/indexar_productos_elasticsearch.py
+```
+
+**Vuelve a correrlo** si cambias `database/elasticsearch/productos_indice.json` (mapping, sinónimos), si corres la migración completa de Mongo (sin `--incremental`) o si borras el volumen de Elasticsearch. Los productos que crees o edites desde el admin se indexan solos.
 
 Aplica las constraints de unicidad del grafo (una sola vez, seguro de repetir):
 
@@ -239,7 +302,19 @@ python database/migrations/sembrar_resenas_fraude.py
 python backend/main.py
 ```
 
-Flask queda escuchando en `http://127.0.0.1:8000`. Internamente `backend/main.py` solo llama a `create_app()`; las rutas reales viven organizadas por dominio en `backend/app/blueprints/` (ver estructura más abajo o `docs/STACK.md` para el detalle completo).
+Flask queda escuchando en `http://127.0.0.1:8000`. Internamente, `backend/main.py` llama a `create_app()` y arranca el **relevo del outbox**: un hilo que cada 15 s reintenta los eventos de sincronización pendientes del checkout. En la consola debe aparecer una sola vez `[relevo] Relevo de eventos de sincronización activo`. Las rutas viven organizadas por dominio en `backend/app/blueprints/` (ver la estructura más abajo o `docs/STACK.md` para el detalle completo).
+
+#### Probar las fallas del checkout
+
+Con `PERMITIR_FALLAS_SIMULADAS=1` en el `.env` (y el backend reiniciado), el formulario de checkout muestra un selector **Simular falla (solo desarrollo)**. Los scripts automáticos verifican cada escenario directamente en los cuatro motores. Crean pedidos reales en tu base local, del comprador `maria.torres@email.com`:
+
+```bash
+python backend/scripts/prueba_fallas_checkout.py               # 5 escenarios de falla simulada
+python backend/scripts/prueba_fallas_checkout.py --caida-real  # + detiene y levanta Elasticsearch de verdad
+python backend/scripts/prueba_buscador.py --caida-real         # evidencia del buscador
+```
+
+Qué se prueba y qué resultado se espera: [`docs/estrategia-consistencia-checkout.md`](docs/estrategia-consistencia-checkout.md) (sección 7).
 
 ### 7. Levantar el frontend
 
@@ -249,7 +324,7 @@ npm install
 npm run dev
 ```
 
-Vite queda escuchando en `http://localhost:5173` (o el siguiente puerto libre si ese ya está en uso) y habla con el backend en `http://127.0.0.1:8000`. Rutas: `/` sitio público (catálogo paginado, carrito, checkout, login/registro y "Mi cuenta" del comprador), `/producto/:id` detalle de producto (reseñas y oferta de inventario limitado si el producto tiene una activa), `/admin` panel admin (catálogo, categorías, usuarios, ventas, historial, fraude — este último solo para administrador).
+Vite queda escuchando en `http://localhost:5173` (o el siguiente puerto libre si ese ya está en uso) y habla con el backend en `http://127.0.0.1:8000`. Rutas: `/` sitio público (catálogo paginado, buscador con autocompletado y facetas, carrito, checkout, login/registro y "Mi cuenta" del comprador), `/producto/:id` detalle de producto (reseñas y oferta de inventario limitado si el producto tiene una activa), `/admin` panel admin (catálogo, categorías, usuarios, ventas, historial, fraude y sincronización; estas dos últimas, solo para administrador).
 
 Para un build de producción: `npm run build` (genera `frontend/app/dist/`).
 
@@ -261,7 +336,7 @@ Todos los usuarios semilla usan la misma contraseña: **`Tiendaya123!`**
 
 | Email | Rol | Notas |
 |---|---|---|
-| admin@tiendaya.com | administrador | Acceso completo a `/admin` (catálogo, categorías, usuarios, historial, fraude) |
+| admin@tiendaya.com | administrador | Acceso completo a `/admin` (catálogo, categorías, usuarios, historial, fraude, sincronización) |
 | ventas@techstore.com | vendedor | Acceso a `/admin` acotado a su propio catálogo y "Mis ventas" (sin Categorías/Usuarios/Fraude) |
 | contacto@modaurbana.com | vendedor | Igual que el anterior |
 | carlos.mendez@email.com | comprador | Dirección de envío registrada; "Mi cuenta" con pedidos, perfil y direcciones |
@@ -320,12 +395,14 @@ Tras correr `database/postgres/datos_semilla_masivos.sql` (paso 3) hay **40 tien
 
 ```
 backend/
-  main.py                    Entry point: from app import create_app; app.run(..., threaded=True)
+  main.py                    Entry point: create_app() + relevo del outbox (hilo) + app.run(..., threaded=True)
   app/
     __init__.py                 create_app(): Flask + CORS + registro de blueprints
-    config.py                    load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, NEO4J_URI...
-    extensions.py                 db (SQLAlchemy), Mongo (col_productos, col_historial, col_resenas), redis_client, neo4j_driver
-    models.py                      Modelos SQLAlchemy: Usuario, Direccion, Categoria, Producto, Inventario, Pedido, LineaPedido
+    config.py                    load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, NEO4J_URI, ELASTICSEARCH_URL, OUTBOX_*, PERMITIR_FALLAS_SIMULADAS
+    extensions.py                 db (SQLAlchemy), Mongo (col_productos, col_historial, col_resenas), redis_client, neo4j_driver, es_client
+    models.py                      Modelos SQLAlchemy: Usuario, Direccion, Categoria, Producto, Inventario, Pedido, LineaPedido, CheckoutIdempotencia, EventoSincronizacion
+    busqueda_es.py                Elasticsearch: documento del índice, indexar, búsqueda con facetas, autocompletado (Entrega 3)
+    sincronizacion.py             Outbox del checkout: registrar y procesar eventos idempotentes + hilo de relevo (Entrega 3)
     ofertas_redis.py              Keys, carga de scripts Lua y wrappers de la oferta (compartido por ofertas, carrito y checkout)
     lua/
       crear_oferta.lua               Crea cupo, límite, precio e id de la oferta en un solo paso (mismo TTL)
@@ -336,12 +413,15 @@ backend/
       consumir_reserva_oferta.lua       Checkout: pasa la reserva a "en pago" y descuenta el cupo
       compensar_reserva_oferta.lua      Checkout fallido: devuelve las unidades y restaura la reserva
       confirmar_reserva_oferta.lua      Checkout confirmado: cierra la reserva como vendida
+      limpiar_carrito_comprado.lua      Outbox: quita del carrito solo las líneas pagadas que no cambiaron (Entrega 3)
     blueprints/
       auth.py                       /api/auth/register, /api/auth/login, /api/usuarios, /api/usuarios/<id>, /api/usuarios/<id>/perfil (PUT)
       direcciones.py                 /api/usuarios/<id_usuario>/direcciones (GET, POST; máx. 3) y .../<id_direccion> (PUT, DELETE)
       compradores.py                  /api/compradores/<id_comprador>/pedidos (historial de pedidos + total gastado)
-      checkout.py                    /api/checkout (carrito de Redis + reservas de oferta; copia el stock final a Mongo)
-      catalogo.py                     /api/categorias, /api/categorias/<id>/filtros, /api/productos (paginado), /api/productos/<id>
+      checkout.py                    /api/checkout (idempotencia + reservas de oferta + outbox), /api/checkout/fallas-simuladas
+      catalogo.py                     /api/categorias, /api/categorias/<id>/filtros, /api/productos (paginado), /api/productos/<id> (indexa en Elasticsearch al guardar)
+      busqueda.py                     /api/busqueda, /api/busqueda/autocompletar (Elasticsearch, Entrega 3)
+      sincronizacion.py               /api/sincronizacion/eventos, /procesar, /reintentar-fallidos (panel admin del outbox, Entrega 3)
       historial.py                     /api/historial, /api/historial/<producto_id>
       vendedores.py                     /api/vendedores/<id>/ventas
       carrito.py                        /api/carrito/<id_usuario> (Redis, Entrega 2)
@@ -350,6 +430,8 @@ backend/
       fraude.py                         /api/fraude/alertas (consulta Cypher de 3 saltos, Entrega 2)
   scripts/
     prueba_concurrencia_oferta.py  Evidencia de que la oferta límite no permite sobreventa bajo concurrencia
+    prueba_fallas_checkout.py      Evidencia de la estrategia de consistencia: 5 fallas simuladas + caída real de Elasticsearch (Entrega 3)
+    prueba_buscador.py             Evidencia del buscador: errores de tipeo, sinónimos, autocompletado, facetas, respaldo (Entrega 3)
 database/
   postgres/
     ddl_tiendaya.sql               Esquema 3FN + semilla + sp_procesar_checkout
@@ -357,34 +439,43 @@ database/
     datos_semilla_usuarios.sql     10 compradores + direcciones adicionales (Entrega 2, IDs dinámicos vía ON CONFLICT)
     datos_semilla_masivos.sql      Semilla masiva: 19 subcategorías + 40 tiendas + 1000 productos e inventario (generado, idempotente)
     migracion_sp_checkout_precio_oferta.sql  Actualiza sp_procesar_checkout en bases existentes (precio de oferta por línea)
+    migracion_entrega3_consistencia.sql      Tablas checkout_idempotencia y eventos_sincronizacion (outbox) en bases existentes
   mongo/
     01_indexes.js                  Índices de referencia (la migración crea todos menos idx_activo_precio, ver paso 4)
     02_aggregation_queries.js      Consultas de agregación de referencia
   neo4j/
     01_constraints.cypher          Constraints de unicidad para nodos Cuenta/Producto (Entrega 2)
+  elasticsearch/
+    productos_indice.json          Settings y mapping del índice de productos: analizadores, sinónimos, autocompletado (Entrega 3)
   migrations/
     migracion_postgres_a_mongo.py  ETL: aplana productos de Postgres a documentos Mongo + fotos reales por SKU (--incremental: sin borrar)
     generar_semilla_masiva.py       Genera datos_semilla_masivos.sql + datos_semilla_masivos_catalogo.json (determinístico)
     datos_semilla_masivos_catalogo.json  Atributos (incl. personalizados) y 1-3 fotos Unsplash por SKU de la semilla masiva
     sembrar_resenas_fraude.py       Siembra reseñas con un patrón de fraude detectable (Entrega 2, idempotente)
+    indexar_productos_elasticsearch.py  Indexa el catálogo de Mongo en un índice versionado y mueve el alias (Entrega 3)
 frontend/
   app/                        Sitio Vue 3 + Vite (único frontend, ver docs/STACK.md)
     src/
       views/                       VistaPublica.vue, VistaDetalleProducto.vue, VistaAdmin.vue
-      components/publico/           Catálogo, filtros, tarjeta de producto, carrito, checkout, login/registro, reseñas, oferta límite, PerfilComprador ("Mi cuenta")
+      components/publico/           Catálogo, filtros, tarjeta de producto, carrito, checkout, login/registro, reseñas, oferta límite, PerfilComprador ("Mi cuenta"), ResultadosBusqueda (facetas)
       components/comunes/            Paginacion.vue (compartido por el catálogo público y el del admin)
-      components/admin/              Catálogo, categorías, usuarios, ventas, historial, fraude (GestionFraude.vue)
+      components/admin/              Catálogo, categorías, usuarios, ventas, historial, fraude (GestionFraude.vue), sincronización (GestionSincronizacion.vue)
       composables/                    useSesion, useToast, useCategorias, useCarrito (Redis-backed, Entrega 2)
       services/api.js                 apiFetch (wrapper de fetch contra el backend)
 docs/
   STACK.md                   Bitácora técnica completa: qué cambió en cada fase, por qué, y qué se verificó
-  arquitectura.md            Diagrama de arquitectura actualizado (Entrega 2)
+  arquitectura.md            Diagrama de arquitectura actualizado (Entrega 3)
+  estrategia-consistencia-checkout.md  Estrategia de consistencia del checkout: puntos de falla, mitigación y prueba de falla (Entrega 3)
   decisiones/
     ADR-002-grafos-vs-columnar.md   Registro de decisión: Neo4j para fraude en reseñas, columnar descartado por ahora
     ADR-003-redis-carrito-y-oferta.md  Registro de decisión: Redis para el carrito y la oferta de inventario limitado
+    ADR-004-motor-de-busqueda.md       Registro de decisión: Elasticsearch para el buscador y diseño del mapping
+    ADR-005-newsql-pagos.md            Evaluación NewSQL para pagos: no migrar, y cuándo sí
   informe-entrega-2.md       Informe de la Entrega 2 (decisiones, evidencia y responsabilidades)
+  informe-entrega-3.md       Informe de la Entrega 3 (buscador, consistencia, prueba de falla, NewSQL)
+  evidencia/                 Salidas de las pruebas de la Entrega 3 (fallas del checkout y buscador)
   guia-prueba-fraude.md      Paso a paso para provocar y revisar una alerta de fraude, y limpiar los datos de prueba
-docker-compose.yml          Redis + Neo4j (Entrega 2)
+docker-compose.yml          Redis + Neo4j (Entrega 2) + Elasticsearch (Entrega 3)
 requirements.txt
 .env.example
 ```

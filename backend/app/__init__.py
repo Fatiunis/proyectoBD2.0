@@ -4,6 +4,7 @@ from flask_cors import CORS
 from .config import SQLALCHEMY_DATABASE_URI
 from .extensions import db
 from .blueprints.auth import bp as auth_bp
+from .blueprints.busqueda import bp as busqueda_bp
 from .blueprints.carrito import bp as carrito_bp
 from .blueprints.catalogo import bp as catalogo_bp
 from .blueprints.checkout import bp as checkout_bp
@@ -13,6 +14,7 @@ from .blueprints.fraude import bp as fraude_bp
 from .blueprints.historial import bp as historial_bp
 from .blueprints.ofertas import bp as ofertas_bp
 from .blueprints.resenas import bp as resenas_bp
+from .blueprints.sincronizacion import bp as sincronizacion_bp
 from .blueprints.vendedores import bp as vendedores_bp
 
 
@@ -25,6 +27,7 @@ def create_app():
     db.init_app(app)
 
     app.register_blueprint(auth_bp)
+    app.register_blueprint(busqueda_bp)
     app.register_blueprint(carrito_bp)
     app.register_blueprint(checkout_bp)
     app.register_blueprint(compradores_bp)
@@ -34,6 +37,7 @@ def create_app():
     app.register_blueprint(historial_bp)
     app.register_blueprint(ofertas_bp)
     app.register_blueprint(resenas_bp)
+    app.register_blueprint(sincronizacion_bp)
     app.register_blueprint(vendedores_bp)
 
     return app

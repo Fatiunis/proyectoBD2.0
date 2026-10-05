@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, watch } from "vue";
+import { ref, reactive, computed, watch, onMounted } from "vue";
 import { apiFetch } from "../../services/api";
 import { useSesion } from "../../composables/useSesion";
 import { useToast } from "../../composables/useToast";
@@ -16,6 +16,27 @@ const cargandoDirecciones = ref(false);
 const idDireccion = ref(null);
 const metodoPago = ref("tarjeta_credito");
 const enviando = ref(false);
+
+// Clave de idempotencia (Entrega 3): una por intento de compra. Se conserva
+// entre reintentos (si la primera respuesta no llegó, el backend reconoce la
+// clave y devuelve el mismo pedido en vez de cobrar otra vez) y se renueva
+// solo cuando la compra se confirma.
+function nuevaClave() {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+let claveIdempotencia = nuevaClave();
+
+// Aviso persistente cuando la compra no se pudo confirmar (además del toast):
+// dice qué pasó, si hubo cobro y si es seguro reintentar.
+const aviso = ref(null); // { tipo: "error" | "incierto", mensaje }
+
+// Fallas simuladas (solo si el backend tiene PERMITIR_FALLAS_SIMULADAS=1).
+const puntosDeFalla = ref([]);
+const fallaSimulada = ref("");
+onMounted(async () => {
+  const { ok, data } = await apiFetch("/checkout/fallas-simuladas");
+  if (ok && data.habilitadas) puntosDeFalla.value = data.puntos;
+});
 
 const mostrarFormDireccion = ref(false);
 const guardandoDireccion = ref(false);
@@ -93,20 +114,32 @@ function cancelarNuevaDireccion() {
 
 async function confirmarCompra() {
   enviando.value = true;
+  aviso.value = null;
   const payload = {
     id_comprador: sesion.value.id_usuario,
     id_direccion: Number(idDireccion.value),
     metodo_pago: metodoPago.value,
+    clave_idempotencia: claveIdempotencia,
   };
+  if (fallaSimulada.value) payload.simular_falla = fallaSimulada.value;
 
-  const { ok, data } = await apiFetch("/checkout", {
+  const { ok, status, data } = await apiFetch("/checkout", {
     method: "POST",
     body: JSON.stringify(payload),
   });
   enviando.value = false;
 
   if (ok) {
-    toast(`Compra confirmada · Pedido #${data.id_pedido} · Referencia ${data.referencia_pago}`, "success");
+    claveIdempotencia = nuevaClave();
+    fallaSimulada.value = "";
+    if (data.repetido) {
+      toast(`Tu pedido #${data.id_pedido} ya estaba confirmado; no se cobró dos veces.`, "success");
+    } else {
+      toast(`Compra confirmada · Pedido #${data.id_pedido} · Referencia ${data.referencia_pago}`, "success");
+    }
+    if (data.sincronizacion_pendiente) {
+      toast("Tu pedido está confirmado. El stock del catálogo y tu carrito pueden tardar unos segundos en actualizarse.", "info");
+    }
     // Una línea normal y una de oferta del mismo producto se agrupan: la reseña es por producto.
     const porProducto = new Map();
     for (const { idProducto, nombre, imagenUrl, cantidad, idCategoria } of items.value) {
@@ -115,10 +148,27 @@ async function confirmarCompra() {
       else porProducto.set(idProducto, { idProducto, nombre, imagenUrl, cantidad, idCategoria });
     }
     limpiarLocal();
-    emit("confirmado", { idPedido: data.id_pedido, referencia: data.referencia_pago, productos: [...porProducto.values()] });
+    emit("confirmado", {
+      idPedido: data.id_pedido,
+      referencia: data.referencia_pago,
+      productos: [...porProducto.values()],
+      sincronizacionPendiente: !!data.sincronizacion_pendiente,
+    });
   } else if (data?.codigo === "CARRITO_VACIO" || data?.codigo === "RESERVA_OFERTA_EXPIRADA") {
     toast(data.error, "error");
     await cargarCarrito();
+  } else if (status === 0) {
+    // No llegó la respuesta: no sabemos si el pago se confirmó. Reintentar con
+    // la MISMA clave es seguro (si ya se confirmó, el backend devuelve ese pedido).
+    aviso.value = {
+      tipo: "incierto",
+      mensaje: "Perdimos la conexión mientras confirmábamos tu compra, así que no sabemos si se completó. "
+        + "Puedes reintentar con tranquilidad: si ya se había confirmado, no se te cobrará dos veces.",
+    };
+  } else if (status === 503) {
+    // Falla de infraestructura antes de confirmar: el backend garantiza que no hubo cobro.
+    aviso.value = { tipo: "error", mensaje: data.error };
+    toast(data.error, "error");
   } else {
     toast(data?.error || "No se pudo completar la compra.", "error");
   }
@@ -200,8 +250,25 @@ async function confirmarCompra() {
             <option value="paypal">PayPal</option>
           </select>
         </div>
+        <div
+          v-if="aviso"
+          role="alert"
+          :class="['rounded-2xl border px-4 py-3 text-sm', aviso.tipo === 'incierto' ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-red-200 bg-red-50 text-red-800']"
+        >
+          <p class="font-semibold mb-1">{{ aviso.tipo === "incierto" ? "No pudimos confirmar tu compra" : "Tu compra no se completó" }}</p>
+          <p>{{ aviso.mensaje }}</p>
+        </div>
+
+        <div v-if="puntosDeFalla.length" class="rounded-2xl border border-dashed border-neutral-300 p-3">
+          <label class="block text-[10px] font-semibold uppercase tracking-wide text-neutral-400 mb-1.5">Simular falla (solo desarrollo)</label>
+          <select v-model="fallaSimulada" class="w-full border-0 border-b border-neutral-300 py-1.5 text-xs focus:ring-0 focus:border-accent outline-none transition bg-transparent">
+            <option value="">Sin falla</option>
+            <option v-for="p in puntosDeFalla" :key="p.punto" :value="p.punto">{{ p.descripcion }}</option>
+          </select>
+        </div>
+
         <button type="submit" :disabled="enviando || !idDireccion" class="w-full py-3 mt-2 bg-neutral-950 hover:bg-neutral-800 disabled:opacity-50 text-white font-semibold rounded-full text-sm transition">
-          {{ enviando ? "Procesando..." : "Confirmar compra" }}
+          {{ enviando ? "Procesando..." : aviso ? "Reintentar compra" : "Confirmar compra" }}
         </button>
       </form>
     </div>

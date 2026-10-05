@@ -26,6 +26,23 @@ NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "tiendaya123")
 
+# Motor de búsqueda del catálogo (Entrega 3). ES_ALIAS_PRODUCTOS es un alias que
+# apunta al índice versionado vigente (productos_v<fecha>): reindexar crea un
+# índice nuevo y mueve el alias, así el buscador nunca ve un índice a medias.
+ELASTICSEARCH_URL = os.getenv("ELASTICSEARCH_URL", "http://localhost:9200")
+ES_ALIAS_PRODUCTOS = os.getenv("ES_ALIAS_PRODUCTOS", "productos")
+
+# Eventos de sincronización (outbox) del checkout: cada cuántos segundos el
+# proceso de relevo reintenta los pendientes, y cuántos intentos hace antes de
+# dejar un evento marcado como "fallido" para revisión manual.
+OUTBOX_INTERVALO_SEGUNDOS = int(os.getenv("OUTBOX_INTERVALO_SEGUNDOS", "15"))
+OUTBOX_MAX_INTENTOS = int(os.getenv("OUTBOX_MAX_INTENTOS", "10"))
+
+# Fallas simuladas del checkout (Entrega 3). SOLO para desarrollo y para la
+# evidencia de la prueba de falla: con "1", POST /api/checkout acepta
+# "simular_falla" en el cuerpo. Con cualquier otro valor ese campo se ignora.
+PERMITIR_FALLAS_SIMULADAS = os.getenv("PERMITIR_FALLAS_SIMULADAS", "0") == "1"
+
 # URI de SQLAlchemy armada a partir de PG_CONFIG, para no duplicar la config de conexión.
 # quote_plus escapa caracteres especiales que pudiera tener el usuario/contraseña.
 SQLALCHEMY_DATABASE_URI = (

@@ -21,11 +21,18 @@ archivos: sin esto Vite podía servir módulos viejos o dos copias distintas de 
 composable (por ejemplo `useCarrito`), partiendo su estado. Si aun así ves algo
 raro tras muchos cambios seguidos, reinicia `npm run dev` y recarga con Ctrl+F5.
 
-Rutas: `/` sitio público (catálogo paginado, carrito, checkout, login/registro
-y "Mi cuenta" del comprador: pedidos, perfil y direcciones),
-`/producto/:id` página de producto (especificaciones, reseñas, oferta límite) y
-`/admin/:tab?` panel admin (catálogo, categorías, usuarios, ventas, historial,
-fraude).
+Rutas: `/` sitio público (catálogo paginado, buscador con autocompletado y
+facetas, carrito, checkout, login/registro y "Mi cuenta" del comprador:
+pedidos, perfil y direcciones), `/producto/:id` página de producto
+(especificaciones, reseñas, oferta límite) y `/admin/:tab?` panel admin
+(catálogo, categorías, usuarios, ventas, historial, fraude, sincronización).
+
+El buscador (`ResultadosBusqueda.vue`) usa `GET /api/busqueda` (Elasticsearch)
+y, si responde 503, repite la búsqueda contra `GET /api/productos?q=`
+(MongoDB) mostrando un aviso. El checkout manda una clave de idempotencia por
+intento de compra; con `PERMITIR_FALLAS_SIMULADAS=1` en el `.env` del backend,
+muestra además un selector para simular fallas (ver
+`docs/estrategia-consistencia-checkout.md`).
 
 ## Build de producción
 
@@ -47,3 +54,5 @@ Genera el build en `app/dist/`.
 - Componentes compartidos entre el sitio público y el admin en
   `src/components/comunes/` (por ahora, `Paginacion.vue`). `GET /api/productos`
   devuelve `{items, total, pagina, por_pagina, total_paginas}`, no una lista.
+- `apiFetch` (`src/services/api.js`) no lanza si el servidor no responde:
+  devuelve `{ok: false, status: 0, data: {codigo: "SIN_CONEXION"}}`.

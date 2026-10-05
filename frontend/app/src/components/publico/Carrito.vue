@@ -66,6 +66,10 @@ onUnmounted(() => clearInterval(intervalo));
         <p class="text-neutral-500">Pedido <span class="font-semibold text-neutral-950">#{{ compraConfirmada.idPedido }}</span></p>
         <p class="text-neutral-500">Referencia <span class="font-mono font-semibold text-neutral-950">{{ compraConfirmada.referencia }}</span></p>
       </div>
+      <p v-if="compraConfirmada.sincronizacionPendiente" class="mt-4 text-sm text-neutral-500">
+        Tu pedido y tu pago ya quedaron registrados. El stock que ves en el catálogo y tu carrito
+        pueden tardar unos segundos en actualizarse.
+      </p>
 
       <p class="text-xs font-semibold uppercase tracking-wide text-neutral-400 mt-8 mb-1">¿Qué te parecieron tus productos?</p>
       <div class="divide-y divide-neutral-200 border-t border-b border-neutral-200">

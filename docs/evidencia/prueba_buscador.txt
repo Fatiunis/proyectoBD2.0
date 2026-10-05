@@ -1,0 +1,42 @@
+==========================================================================
+EVIDENCIA DEL BUSCADOR (ELASTICSEARCH)
+==========================================================================
+
+[B1] Errores de tipeo
+   [OK  ] 'laptp' encuentra resultados y sugiere 'laptop'  (106 resultados; ['Laptop triple AAA [Laptops]'])
+   [OK  ] 'audifnos' encuentra resultados y sugiere 'audifonos'  (50 resultados; ['Audífonos Audio-Technica ATH-M50x Azul [Audífonos]'])
+   [OK  ] 'celulr' encuentra resultados y sugiere 'celular'  (74 resultados; ['Apple iPhone 13 128GB Grafito [Celulares]'])
+
+[B2] Sinónimos y raíces
+   [OK  ] 'portatil' (sinónimo) encuentra laptops  (['Laptop triple AAA [Laptops]', 'Laptop Gamer 16 Pulgadas [Laptops]'])
+   [OK  ] 'auriculares' (sinónimo) encuentra audífonos  (['Audífonos HyperX Cloud II Beige [Audífonos]'])
+   [OK  ] 'mochilas' (plural) encuentra mochilas  (40 resultados)
+
+[B3] Relevancia
+   [OK  ] 'celular': los 5 primeros son de la categoría Celulares (no tablets 'Wi-Fi + Celular')  (['Apple iPhone 13 128GB Grafito [Celulares]', 'Apple iPhone 13 256GB Azul [Celulares]'])
+   [OK  ] 'smartphone samsung' trae celulares Samsung primero  (['Samsung Galaxy S24 256GB Grafito [Celulares]', 'Samsung Galaxy A15 256GB Blanco [Celulares]'])
+   [OK  ] 'mochila laptop' trae mochilas para laptop, no laptops  (['Mochila para Laptop Jansport 30L Rojo [Mochilas]', 'Mochila para Laptop Osprey 25L Rojo [Mochilas]'])
+
+[B4] Autocompletado
+   [OK  ] 'iph' devuelve sugerencias  (Apple iPhone 15 256GB Grafito, Apple iPhone 13 256GB Blanco)
+   [OK  ] 'lapt' devuelve sugerencias  (Laptop triple AAA, Laptop Gamer 16 Pulgadas)
+   [OK  ] 'aufi' devuelve sugerencias  (Audífonos Audio-Technica ATH-M50x Beige, Audífonos Audio-Technica ATH-M50x Rosa)
+
+[B5] Facetas (agregaciones del motor)
+   [OK  ] la búsqueda 'mouse' trae facetas de categoría, marca, tienda y precio  (marcas=['Logitech', 'Genius', 'Redragon', 'Apple'])
+   [OK  ] filtrar por marca=Logitech deja 20 resultados (el conteo de la faceta)  (total=20)
+   [OK  ] con la marca elegida, la faceta de marcas sigue mostrando las demás (disyuntiva)  (7 marcas)
+   [OK  ] las demás facetas sí se recalculan con el filtro de marca
+
+[B6] Precio y orden
+   [OK  ] filtro Q1,000 a Q5,000 respetado  (14 resultados, de Q1029.00 a Q4759.00)
+   [OK  ] orden por precio ascendente
+
+[B7] Elasticsearch detenido de verdad
+   [OK  ] GET /api/busqueda responde 503 BUSCADOR_NO_DISPONIBLE  (503)
+   [OK  ] la búsqueda de respaldo (MongoDB $text) sigue respondiendo  (105 resultados)
+   [OK  ] al volver a levantarlo, el buscador responde de nuevo
+
+==========================================================================
+RESUMEN: 21/21 verificaciones correctas
+RESULTADO: PASS

@@ -1,24 +1,91 @@
 <script setup>
-import { ref } from "vue";
-import { RouterLink } from "vue-router";
+import { ref, watch } from "vue";
+import { RouterLink, useRouter } from "vue-router";
+import { apiFetch } from "../../services/api";
 import { useSesion } from "../../composables/useSesion";
 import { useCarrito } from "../../composables/useCarrito";
 
-defineProps({
+const props = defineProps({
   vistaActual: { type: String, required: true },
+  // Búsqueda vigente en la vista: si cambia desde afuera (por ejemplo, al
+  // elegir "¿quisiste decir...?"), el texto de la barra la acompaña.
+  busquedaActual: { type: String, default: "" },
 });
 
 const emit = defineEmits(["cambiar-vista", "buscar"]);
 
+const router = useRouter();
 const { sesion, limpiarSesion } = useSesion();
 const { cantidadTotal } = useCarrito();
 
-const busqueda = ref("");
-let debounceBusqueda = null;
+// Autocompletado (Entrega 3): mientras se escribe se piden sugerencias a
+// GET /api/busqueda/autocompletar (Elasticsearch, edge n-grams + fuzziness).
+// Enter sin una sugerencia elegida lanza la búsqueda completa (con facetas).
+const busqueda = ref(props.busquedaActual);
+watch(() => props.busquedaActual, (nueva) => (busqueda.value = nueva));
+const sugerencias = ref([]);
+const abierto = ref(false);
+const resaltada = ref(-1);
+let debounceSugerencias = null;
+let consultaVigente = 0;
 
 function onBuscarInput() {
-  clearTimeout(debounceBusqueda);
-  debounceBusqueda = setTimeout(() => emit("buscar", busqueda.value.trim()), 350);
+  clearTimeout(debounceSugerencias);
+  const texto = busqueda.value.trim();
+  if (!texto) {
+    sugerencias.value = [];
+    abierto.value = false;
+    emit("buscar", "");
+    return;
+  }
+  debounceSugerencias = setTimeout(() => pedirSugerencias(texto), 150);
+}
+
+async function pedirSugerencias(texto) {
+  if (texto.length < 2) {
+    sugerencias.value = [];
+    return;
+  }
+  const consulta = ++consultaVigente;
+  const { ok, data } = await apiFetch(`/busqueda/autocompletar?q=${encodeURIComponent(texto)}`);
+  if (consulta !== consultaVigente) return; // llegó tarde: ya se escribió otra cosa
+  sugerencias.value = ok && Array.isArray(data) ? data : [];
+  resaltada.value = -1;
+  abierto.value = true;
+}
+
+function buscarTodo() {
+  clearTimeout(debounceSugerencias);
+  consultaVigente++;
+  abierto.value = false;
+  emit("buscar", busqueda.value.trim());
+}
+
+function irAProducto(s) {
+  abierto.value = false;
+  router.push(`/producto/${s._id}`);
+}
+
+function onTecla(e) {
+  if (e.key === "ArrowDown" && sugerencias.value.length) {
+    e.preventDefault();
+    abierto.value = true;
+    resaltada.value = (resaltada.value + 1) % sugerencias.value.length;
+  } else if (e.key === "ArrowUp" && sugerencias.value.length) {
+    e.preventDefault();
+    resaltada.value = resaltada.value <= 0 ? sugerencias.value.length - 1 : resaltada.value - 1;
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    if (abierto.value && resaltada.value >= 0) irAProducto(sugerencias.value[resaltada.value]);
+    else buscarTodo();
+  } else if (e.key === "Escape") {
+    abierto.value = false;
+  }
+}
+
+function cerrarConRetraso() {
+  // Deja que un clic sobre una sugerencia llegue antes de cerrar la lista.
+  setTimeout(() => (abierto.value = false), 150);
 }
 
 function cerrarSesion() {
@@ -40,9 +107,46 @@ function cerrarSesion() {
         type="search"
         v-model="busqueda"
         @input="onBuscarInput"
+        @keydown="onTecla"
+        @focus="sugerencias.length && (abierto = true)"
+        @blur="cerrarConRetraso"
         placeholder="Buscar productos..."
+        role="combobox"
+        aria-autocomplete="list"
+        :aria-expanded="abierto"
         class="w-full bg-neutral-900 hover:bg-neutral-800 focus:bg-neutral-800 border border-neutral-800 focus:border-neutral-600 rounded-full pl-10 pr-4 py-2 text-sm text-white placeholder:text-neutral-500 outline-none transition"
       >
+
+      <div
+        v-if="abierto && busqueda.trim().length >= 2"
+        class="absolute left-0 right-0 top-full mt-2 bg-white rounded-2xl shadow-xl border border-neutral-200 overflow-hidden z-50 w-[26rem] max-w-[90vw]"
+        role="listbox"
+      >
+        <button
+          v-for="(s, i) in sugerencias"
+          :key="s._id"
+          type="button"
+          role="option"
+          :aria-selected="i === resaltada"
+          @mousedown.prevent="irAProducto(s)"
+          @mouseenter="resaltada = i"
+          :class="['w-full text-left px-4 py-2.5 flex items-center gap-3 transition', i === resaltada ? 'bg-neutral-100' : 'hover:bg-neutral-50']"
+        >
+          <img v-if="s.imagen_url" :src="s.imagen_url" alt="" class="w-9 h-9 rounded-lg object-cover shrink-0 bg-neutral-100">
+          <div v-else class="w-9 h-9 rounded-lg bg-neutral-100 shrink-0"></div>
+          <div class="min-w-0 flex-1">
+            <p class="text-sm font-medium text-neutral-950 truncate">{{ s.nombre }}</p>
+            <p class="text-[11px] text-neutral-400">{{ s.categoria }}</p>
+          </div>
+          <span class="text-sm font-semibold text-accent-700 shrink-0">Q{{ Number(s.precio_base).toFixed(2) }}</span>
+        </button>
+        <p v-if="!sugerencias.length" class="px-4 py-3 text-sm text-neutral-500">Sin sugerencias. Presiona Enter para buscar.</p>
+        <button
+          type="button"
+          @mousedown.prevent="buscarTodo"
+          class="w-full text-left px-4 py-2.5 text-xs font-semibold text-accent border-t border-neutral-100 hover:bg-neutral-50"
+        >Ver todos los resultados de "{{ busqueda.trim() }}" →</button>
+      </div>
     </div>
 
     <div class="flex items-center gap-1 shrink-0">

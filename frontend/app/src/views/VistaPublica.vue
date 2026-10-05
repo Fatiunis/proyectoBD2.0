@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import NavPublica from "../components/publico/NavPublica.vue";
 import CatalogoProductos from "../components/publico/CatalogoProductos.vue";
+import ResultadosBusqueda from "../components/publico/ResultadosBusqueda.vue";
 import Carrito from "../components/publico/Carrito.vue";
 import FormularioLogin from "../components/publico/FormularioLogin.vue";
 import FormularioRegistro from "../components/publico/FormularioRegistro.vue";
@@ -30,18 +31,19 @@ function onBuscar(texto) {
 
 <template>
   <div class="bg-white text-neutral-950 min-h-screen flex flex-col">
-    <NavPublica :vista-actual="vistaActual" @cambiar-vista="cambiarVista" @buscar="onBuscar" />
+    <NavPublica :vista-actual="vistaActual" :busqueda-actual="busqueda" @cambiar-vista="cambiarVista" @buscar="onBuscar" />
 
     <main class="max-w-[1600px] mx-auto px-6 lg:px-10 py-6 flex-grow w-full">
       <FormularioLogin v-if="vistaActual === 'login'" @exito="cambiarVista('catalogo')" @ir-a-registro="cambiarVista('registro')" />
       <FormularioRegistro v-else-if="vistaActual === 'registro'" @exito="cambiarVista('login')" />
       <Carrito v-else-if="vistaActual === 'carrito'" @completado="cambiarVista('catalogo')" />
       <PerfilComprador v-else-if="vistaActual === 'perfil'" />
-      <CatalogoProductos v-else :busqueda="busqueda" />
+      <ResultadosBusqueda v-else-if="busqueda" :busqueda="busqueda" @buscar="onBuscar" />
+      <CatalogoProductos v-else />
     </main>
 
     <footer class="border-t border-neutral-200 bg-white text-neutral-400 text-xs py-6 text-center tracking-wide">
-      TiendaYa · Portal E-Commerce con arquitectura políglota (PostgreSQL + MongoDB)
+      TiendaYa · Portal E-Commerce con arquitectura políglota (PostgreSQL · MongoDB · Redis · Neo4j · Elasticsearch)
     </footer>
   </div>
 </template>

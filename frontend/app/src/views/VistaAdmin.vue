@@ -10,9 +10,10 @@ import GestionCategorias from "../components/admin/GestionCategorias.vue";
 import GestionUsuarios from "../components/admin/GestionUsuarios.vue";
 import HistorialProducto from "../components/admin/HistorialProducto.vue";
 import GestionFraude from "../components/admin/GestionFraude.vue";
+import GestionSincronizacion from "../components/admin/GestionSincronizacion.vue";
 
 const ROLES_CON_ACCESO = ["administrador", "vendedor"];
-const TABS_VALIDOS = ["catalogo", "categorias", "usuarios", "ventas", "historial", "fraude"];
+const TABS_VALIDOS = ["catalogo", "categorias", "usuarios", "ventas", "historial", "fraude", "sincronizacion"];
 
 const props = defineProps({ tab: { type: String, default: null } });
 
@@ -45,6 +46,7 @@ function cambiarTab(tab) {
       <GestionUsuarios v-else-if="tabActual === 'usuarios' && !esVendedor" />
       <HistorialProducto v-else-if="tabActual === 'historial'" />
       <GestionFraude v-else-if="tabActual === 'fraude' && !esVendedor" />
+      <GestionSincronizacion v-else-if="tabActual === 'sincronizacion' && !esVendedor" />
     </main>
   </div>
 </template>

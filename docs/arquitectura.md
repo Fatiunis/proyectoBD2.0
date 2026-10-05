@@ -1,8 +1,8 @@
-# Arquitectura de TiendaYa (actualizada — Entrega 2)
+# Arquitectura de TiendaYa (actualizada — Entrega 3)
 
-Arquitectura políglota: cada motor de persistencia cubre el rol para el que está mejor
-adaptado, sin sincronización transaccional (2PC) entre ellos — cada integración documenta
-explícitamente su ventana de consistencia.
+Arquitectura políglota: cada motor de persistencia cubre el rol para el que está mejor adaptado, sin sincronización transaccional (2PC) entre ellos. Cada integración documenta explícitamente su ventana de consistencia.
+
+**Novedades de la Entrega 3** (en el diagrama): **Elasticsearch** como motor de búsqueda (`busqueda.py`), el **outbox** de sincronización en PostgreSQL (`eventos_sincronizacion`) con su **relevo** de reintentos, la **clave de idempotencia** del checkout (`checkout_idempotencia`) y el panel de sincronización (`sincronizacion.py`).
 
 ```mermaid
 flowchart TB
@@ -12,23 +12,27 @@ flowchart TB
 
     subgraph Backend["Flask (backend/app) — Blueprints por dominio"]
         Auth[auth.py]
-        Checkout[checkout.py]
+        Checkout["checkout.py\n(idempotencia + outbox)"]
         Direcciones[direcciones.py]
         Compradores[compradores.py]
         Catalogo[catalogo.py]
+        Busqueda["busqueda.py\n(Entrega 3)"]
         Historial[historial.py]
         Vendedores[vendedores.py]
         Carrito[carrito.py]
         Ofertas[ofertas.py]
         Resenas[resenas.py]
         Fraude[fraude.py]
+        Sincro["sincronizacion.py\n(panel admin, Entrega 3)"]
+        Relevo["Relevo del outbox\n(hilo, cada 15 s)"]
     end
 
     subgraph Persistencia
-        PG[("PostgreSQL\nusuarios, direcciones, pedidos, pagos,\ninventario, sp_procesar_checkout")]
-        Mongo[("MongoDB\ncol_productos, col_historial,\ncol_resenas")]
+        PG[("PostgreSQL\nusuarios, direcciones, pedidos, pagos,\ninventario, sp_procesar_checkout\ncheckout_idempotencia, eventos_sincronizacion")]
+        Mongo[("MongoDB\nproductos, historial_cambios_productos,\nresenas")]
         Redis[("Redis\ncarrito:{id_usuario} (TTL 30 min por inactividad)\noferta:{producto_id}:stock / :limite / :precio / :id\n(TTL = duración de la oferta)\noferta:{producto_id}:reservas (reservas de 1 min)")]
         Neo4j[("Neo4j\n(:Cuenta)-[:CALIFICO]->(:Producto)")]
+        ES[("Elasticsearch\nalias productos -> productos_v + fecha\n(mapping propio, analizador español,\nsinónimos, autocompletado)")]
     end
 
     Vue -- "apiFetch (REST, JSON)" --> Backend
@@ -36,24 +40,35 @@ flowchart TB
     Auth --> PG
     Direcciones --> PG
     Compradores -- "historial de pedidos" --> PG
-    Checkout -- "CALL sp_procesar_checkout\n(bloqueo pesimista)" --> PG
+    Checkout -- "1 transacción: clave de idempotencia +\nCALL sp_procesar_checkout + eventos (outbox)" --> PG
+    Checkout -- "lee carrito, consume / compensa\nreservas de oferta (Lua)" --> Redis
+    Relevo -- "eventos pendientes\n(FOR UPDATE SKIP LOCKED)" --> PG
+    Relevo -. "cerrar reservas, limpiar carrito\n(Lua, idempotente)" .-> Redis
+    Relevo -. "fijar stock = PostgreSQL" .-> Mongo
+    Relevo -. "fijar stock = PostgreSQL;\nreindexar producto" .-> ES
+    Sincro --> PG
     Catalogo --> Mongo
-    Catalogo -. "id_sql_origen (FK lógica,\nsin integridad garantizada);\ncopia el stock editado en el admin" .-> PG
+    Catalogo -. "id_sql_origen (FK lógica);\ncopia el stock editado en el admin" .-> PG
+    Catalogo -. "indexa el producto al guardarlo\n(si falla, evento en el outbox)" .-> ES
+    Busqueda -- "multi_match fuzzy, facetas (aggs),\nphrase suggester, autocompletado" --> ES
+    Busqueda -. "respaldo si ES no responde:\nGET /api/productos?q= ($text)" .-> Mongo
     Historial --> Mongo
     Vendedores --> PG
     Carrito --> Redis
-    Checkout -- "lee carrito:{id_comprador}, consume/confirma/compensa\nreservas de oferta (Lua) y borra el carrito" --> Redis
-    Checkout -. "copia el stock final\n(mejor esfuerzo)" .-> Mongo
     Ofertas -- "EVALSHA crear / consultar /\nreservar_oferta.lua" --> Redis
     Resenas --> Mongo
     Resenas -. "MERGE síncrono,\nsin 2PC (mejor esfuerzo)" .-> Neo4j
     Fraude -- "Cypher, 3 saltos" --> Neo4j
 ```
 
+Líneas continuas: escritura o lectura en la fuente de verdad de ese dato. Líneas punteadas: copias o proyecciones que pueden quedar atrasadas un tiempo acotado.
+
 ## Notas de consistencia (para el registro de decisiones del curso)
 
-- **Postgres ↔ Mongo (catálogo)**: el checkout descuenta stock en Postgres; el catálogo mostrado al público vive en Mongo. Solo el **stock** se sincroniza, de mejor esfuerzo y sin 2PC: tras confirmar un pedido, el checkout lee el stock que quedó en Postgres y lo copia a Mongo; al editar el stock desde el admin, el cambio se copia al `inventario` de Postgres. Si la copia falla, la operación principal queda hecha y solo se registra una advertencia. El precio y el resto de los campos editados en el admin siguen solo en Mongo (ver `README.md`).
-- **Mongo ↔ Neo4j (reseñas/fraude)**: al crear una reseña, se escribe primero en Mongo (fuente de verdad) y luego se sincroniza a Neo4j en el mismo request. Si Neo4j falla, la reseña queda igualmente persistida en Mongo — se pierde solo la actualización del grafo, no el dato de negocio.
-- **Redis (carrito y oferta límite)**: ambos son datos transitorios por diseño — el carrito expira por inactividad (30 min) y la oferta límite vence sola al terminar la duración indicada al crearla. La oferta es un cupo independiente del inventario real de Postgres: reservar aparta unidades por 1 minuto sin descontar nada, y solo el checkout descuenta el cupo en Redis y el `inventario` en Postgres.
-- **Redis → Postgres (checkout)**: el checkout lee los productos del carrito guardado en Redis (no los que envía el navegador) y los pasa a `sp_procesar_checkout`, que valida precio y stock contra Postgres dentro de una transacción. Las líneas de oferta se consumen antes en Redis (reserva `en_pago`); si el procedimiento falla, se compensan y las unidades vuelven a la oferta. Tras confirmar el pedido se borra el carrito; si ese borrado fallara, el pedido ya está confirmado y solo se registra una advertencia. Ver `docs/decisiones/ADR-003-redis-carrito-y-oferta.md`.
-- **Sin autenticación centralizada**: ningún componente nuevo introduce JWT/sesión de servidor — se mantiene el patrón ya establecido en el proyecto (`id_usuario`/`rol_solicitante` viajan en cada request, sin verificación criptográfica del lado del servidor).
+- **Checkout (PostgreSQL + Redis + MongoDB + Elasticsearch)**: PostgreSQL es la única transacción ACID y la única que decide si hubo compra. Antes del COMMIT, las reservas de oferta consumidas en Redis se **compensan** si algo falla. En el COMMIT, el pedido, la clave de idempotencia y los eventos de sincronización se confirman juntos. Después del COMMIT, los eventos se ejecutan y, si un motor falla, el relevo los **reintenta** (son idempotentes). Detalle de cada punto de falla y prueba de falla simulada en [`estrategia-consistencia-checkout.md`](estrategia-consistencia-checkout.md).
+- **Postgres → Mongo y Elasticsearch (stock)**: tras cada compra, el stock se copia por el outbox, con reintentos. Ventana de consistencia medida en las pruebas: de 8 a 25 s tras una falla. Al editar el stock desde el admin, el cambio se copia al `inventario` de Postgres (mejor esfuerzo). El precio y el resto de los campos editados en el admin siguen solo en Mongo (ver `README.md`).
+- **Mongo → Elasticsearch (catálogo)**: el índice es una proyección de solo lectura de la colección `productos`. Al guardar un producto desde el admin se reindexa en el acto; si Elasticsearch no responde, queda un evento `indexar_producto` en el outbox. Se puede reconstruir entero con `database/migrations/indexar_productos_elasticsearch.py`, sin cortar el servicio (alias). Si Elasticsearch está caído, la búsqueda se degrada a la de Mongo con un aviso al usuario. Ver [`decisiones/ADR-004-motor-de-busqueda.md`](decisiones/ADR-004-motor-de-busqueda.md).
+- **Mongo ↔ Neo4j (reseñas y fraude)**: al crear una reseña, se escribe primero en Mongo (fuente de verdad) y luego se sincroniza a Neo4j en el mismo request. Si Neo4j falla, la reseña queda igualmente guardada en Mongo: se pierde solo la actualización del grafo, no el dato de negocio. No pasa por el outbox, porque no es parte del checkout.
+- **Redis (carrito y oferta límite)**: ambos son datos transitorios por diseño. El carrito expira por inactividad (30 min) y la oferta límite vence sola al terminar la duración indicada al crearla. La oferta es un cupo independiente del inventario real de Postgres: reservar aparta unidades por 1 minuto sin descontar nada, y solo el checkout descuenta el cupo en Redis y el `inventario` en Postgres. Ver [`decisiones/ADR-003-redis-carrito-y-oferta.md`](decisiones/ADR-003-redis-carrito-y-oferta.md).
+- **Pagos en PostgreSQL**: se evaluó migrarlos a un motor NewSQL y se decidió no hacerlo. Ver [`decisiones/ADR-005-newsql-pagos.md`](decisiones/ADR-005-newsql-pagos.md).
+- **Sin autenticación centralizada**: ningún componente introduce JWT o sesión de servidor. Se mantiene el patrón ya establecido en el proyecto (`id_usuario` y `rol_solicitante` viajan en cada request, sin verificación criptográfica del lado del servidor), Redis y Elasticsearch corren sin autenticación, y Neo4j solo con su usuario administrador por defecto, sin roles por servicio. Es requisito de la entrega final.

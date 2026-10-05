@@ -4,6 +4,7 @@ from flask import Blueprint, request, jsonify
 from pymongo import ASCENDING
 from sqlalchemy.exc import IntegrityError
 
+from .. import busqueda_es, sincronizacion
 from ..extensions import db, col_productos, col_historial, ZONA_GUATEMALA
 from ..models import Categoria, Producto, Inventario
 
@@ -482,5 +483,21 @@ def crear_o_actualizar_producto():
                 db.session.rollback()
                 print(f"[catalogo] ADVERTENCIA: producto {doc_id} actualizado en Mongo, pero no se pudo "
                       f"sincronizar Inventario.stock_disponible en Postgres: {e}")
+
+    # Índice del buscador (Entrega 3): se reindexa el documento completo tal como
+    # quedó en Mongo. Si Elasticsearch no responde, el cambio queda registrado
+    # como evento pendiente (outbox) y lo reintenta el relevo; el producto ya
+    # está guardado en Mongo, que es la fuente de verdad.
+    try:
+        busqueda_es.indexar_producto(col_productos.find_one({"_id": doc_id}))
+    except Exception as e:
+        print(f"[catalogo] ADVERTENCIA: producto {doc_id} guardado en Mongo, pero no se pudo indexar en "
+              f"Elasticsearch; queda pendiente para el relevo: {e}")
+        try:
+            sincronizacion.registrar("indexar_producto", {"producto_id": doc_id})
+            db.session.commit()
+        except Exception as e2:
+            db.session.rollback()
+            print(f"[catalogo] ADVERTENCIA: tampoco se pudo registrar el evento de reindexación de {doc_id}: {e2}")
 
     return jsonify({"mensaje": "Producto guardado con éxito", "producto_id": doc_id}), 201

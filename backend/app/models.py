@@ -9,9 +9,11 @@ por `database/postgres/ddl_tiendaya.sql`; no se generan tablas nuevas.
 Solo se modelan las columnas que los endpoints actuales necesitan leer o
 escribir, para mantener el cambio acotado a esta sub-fase de migración.
 
-`checkout.py` NO usa estos modelos: sigue invocando `sp_procesar_checkout`
+`checkout.py` no usa estos modelos para el pedido: sigue invocando `sp_procesar_checkout`
 directamente (ver ese blueprint), porque la lógica transaccional vive
-intencionalmente en la base de datos.
+intencionalmente en la base de datos. Sí usa CheckoutIdempotencia y
+EventoSincronizacion (Entrega 3), que escribe en la misma transacción que el
+procedimiento.
 """
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -107,3 +109,32 @@ class LineaPedido(db.Model):
     cantidad = db.Column(db.Integer, nullable=False)
     precio_unitario_historico = db.Column(db.Numeric(12, 2), nullable=False)
     subtotal = db.Column(db.Numeric(12, 2), nullable=False)
+
+
+class CheckoutIdempotencia(db.Model):
+    """Clave de idempotencia de un checkout confirmado (Entrega 3). Se inserta
+    en la misma transacción que el pedido; ver checkout.py."""
+    __tablename__ = "checkout_idempotencia"
+
+    clave = db.Column(db.String(64), primary_key=True)
+    id_comprador = db.Column(db.Integer, db.ForeignKey("usuarios.id_usuario"), nullable=False)
+    id_pedido = db.Column(db.Integer, db.ForeignKey("pedidos.id_pedido"))
+    referencia_pago = db.Column(db.String(100))
+    creado_en = db.Column(db.DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"))
+
+
+class EventoSincronizacion(db.Model):
+    """Outbox transaccional (Entrega 3): trabajo pendiente en Redis, MongoDB o
+    Elasticsearch tras confirmar un pedido. Lo ejecuta app/sincronizacion.py."""
+    __tablename__ = "eventos_sincronizacion"
+
+    id_evento = db.Column(db.BigInteger, primary_key=True)
+    tipo = db.Column(db.String(40), nullable=False)
+    payload = db.Column(JSONB, nullable=False)
+    id_pedido = db.Column(db.Integer, db.ForeignKey("pedidos.id_pedido"))
+    estado = db.Column(db.String(20), nullable=False, server_default=text("'pendiente'"))
+    intentos = db.Column(db.Integer, nullable=False, default=0, server_default=text("0"))
+    ultimo_error = db.Column(db.Text)
+    proximo_intento = db.Column(db.DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"))
+    creado_en = db.Column(db.DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"))
+    procesado_en = db.Column(db.DateTime(timezone=True))

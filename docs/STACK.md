@@ -14,8 +14,8 @@ frameworks oficiales que faciliten organizar el proyecto a medida que crece.
 
 | Capa | Antes | Ahora / plan | Por qué |
 |---|---|---|---|
-| Framework web | Flask, un solo archivo `main.py` | ✅ Flask, reorganizado en **Blueprints** por dominio (`backend/app/blueprints/`: auth, catálogo, checkout, direcciones, historial, vendedores, más carrito, ofertas, reseñas y fraude de la Entrega 2) con application factory (`create_app()`) | Flask ya era la elección correcta (liviano, sin ceremonia); el problema no era el framework sino que todo el código vivía en un único archivo. Los Blueprints son el mecanismo *oficial* de Flask para modularizar rutas sin cambiar de framework. |
-| Acceso a PostgreSQL | SQL crudo con `psycopg2` en cada endpoint | ✅ **SQLAlchemy** (`flask-sqlalchemy`), modelos en `backend/app/models.py` (`Usuario`, `Direccion`, `Categoria`, `Producto`, `Inventario`, `Pedido`, `LineaPedido`) | Evita repetir apertura/cierre manual de conexión y manejo de errores en cada endpoint; da modelos declarativos reutilizables y sesiones manejadas automáticamente. El stored procedure `sp_procesar_checkout` se sigue invocando igual (`CALL` vía `db.session.execute(text(...))`), ya que la lógica transaccional compleja vive intencionalmente en la base de datos y no se reescribe en Python. `get_pg_connection()`/`psycopg2` crudo ya no existen en el código — quedaron completamente reemplazados. |
+| Framework web | Flask, un solo archivo `main.py` | ✅ Flask, reorganizado en **Blueprints** por dominio (`backend/app/blueprints/`: auth, catálogo, checkout, direcciones, historial, vendedores, más carrito, ofertas, reseñas y fraude de la Entrega 2, y búsqueda y sincronización de la Entrega 3) con application factory (`create_app()`) | Flask ya era la elección correcta (liviano, sin ceremonia); el problema no era el framework sino que todo el código vivía en un único archivo. Los Blueprints son el mecanismo *oficial* de Flask para modularizar rutas sin cambiar de framework. |
+| Acceso a PostgreSQL | SQL crudo con `psycopg2` en cada endpoint | ✅ **SQLAlchemy** (`flask-sqlalchemy`), modelos en `backend/app/models.py` (`Usuario`, `Direccion`, `Categoria`, `Producto`, `Inventario`, `Pedido`, `LineaPedido`, y desde la Entrega 3 `CheckoutIdempotencia` y `EventoSincronizacion`) | Evita repetir apertura/cierre manual de conexión y manejo de errores en cada endpoint; da modelos declarativos reutilizables y sesiones manejadas automáticamente. El stored procedure `sp_procesar_checkout` se sigue invocando igual (`CALL` vía `db.session.execute(text(...))`), ya que la lógica transaccional compleja vive intencionalmente en la base de datos y no se reescribe en Python. `get_pg_connection()`/`psycopg2` crudo ya no existen en el código — quedaron completamente reemplazados. |
 | Acceso a MongoDB | `pymongo` directo | Se mantiene `pymongo` | `pymongo` **es** el driver oficial de MongoDB para Python; no hay una razón para introducir un ODM adicional (como MongoEngine) en un proyecto que ya usa agregaciones nativas y necesita flexibilidad de esquema. |
 | Autenticación | Verificación de credenciales sin tokens; el frontend manda `rol_solicitante` en cada request | Pendiente de definir (candidato: `flask-jwt-extended`) | Se documentará cuando se aborde esta fase. |
 
@@ -24,17 +24,19 @@ frameworks oficiales que faciliten organizar el proyecto a medida que crece.
 Estructura resultante:
 ```
 backend/
-  main.py                  # entry point: from app import create_app; app.run(...)
+  main.py                  # entry point: create_app() + relevo del outbox (Entrega 3) + app.run(...)
   app/
     __init__.py              # create_app(): Flask + CORS + registro de blueprints
-    config.py                 # load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, CARRITO_TTL_SEGUNDOS, RESERVA_OFERTA_TTL_SEGUNDOS, NEO4J_*
-    extensions.py              # db (SQLAlchemy), Mongo (col_productos, col_historial, col_resenas), redis_client, neo4j_driver
-    models.py                   # Usuario, Direccion, Categoria, Producto, Inventario, Pedido, LineaPedido
+    config.py                 # load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, CARRITO_TTL_SEGUNDOS, RESERVA_OFERTA_TTL_SEGUNDOS, NEO4J_*, ELASTICSEARCH_URL, OUTBOX_*, PERMITIR_FALLAS_SIMULADAS
+    extensions.py              # db (SQLAlchemy), Mongo (col_productos, col_historial, col_resenas), redis_client, neo4j_driver, es_client
+    models.py                   # Usuario, Direccion, Categoria, Producto, Inventario, Pedido, LineaPedido, CheckoutIdempotencia, EventoSincronizacion
     ofertas_redis.py             # keys, carga perezosa de los scripts Lua y wrappers de la oferta (compartido por ofertas, carrito y checkout)
-    lua/                         # crear/consultar/reservar/liberar oferta, estado_linea, consumir/compensar/confirmar reserva (Entrega 2)
+    lua/                         # crear/consultar/reservar/liberar oferta, estado_linea, consumir/compensar/confirmar reserva (Entrega 2), limpiar_carrito_comprado (Entrega 3)
+    busqueda_es.py               # Elasticsearch: documento del índice, indexar, búsqueda con facetas, autocompletado (Entrega 3)
+    sincronizacion.py            # outbox del checkout: registrar/procesar eventos idempotentes + hilo de relevo (Entrega 3)
     blueprints/
       auth.py                  # /api/auth/register, /api/auth/login, /api/usuarios, /api/usuarios/<id>, PUT /api/usuarios/<id>/perfil
-      checkout.py               # /api/checkout (carrito de Redis + reservas de oferta; copia el stock final a Mongo)
+      checkout.py               # /api/checkout (idempotencia + reservas de oferta + outbox), /api/checkout/fallas-simuladas
       compradores.py            # /api/compradores/<id_comprador>/pedidos ("Mi cuenta": pedidos + total gastado)
       direcciones.py            # /api/usuarios/<id_usuario>/direcciones (GET, POST; máx. 3) y .../<id_direccion> (PUT, DELETE)
       catalogo.py                # /api/categorias, /api/categorias/<id>/filtros, /api/productos (paginado), /api/productos/<id>
@@ -44,6 +46,8 @@ backend/
       ofertas.py                   # /api/ofertas, /api/ofertas/<producto_id>/reservar (Redis + Lua, Entrega 2)
       resenas.py                   # /api/resenas (Mongo + sincronización a Neo4j, Entrega 2)
       fraude.py                    # /api/fraude/alertas (Cypher de varios saltos, Entrega 2)
+      busqueda.py                  # /api/busqueda, /api/busqueda/autocompletar (Elasticsearch, Entrega 3)
+      sincronizacion.py            # /api/sincronizacion/* (panel admin del outbox, Entrega 3)
 ```
 
 ## Frontend
@@ -116,7 +120,9 @@ frontend/app/
 | MongoDB | Sin cambios de motor | Sigue siendo el catálogo de productos + historial (event sourcing); Entrega 2 le agrega la colección `resenas`. |
 | Redis | ✅ Nuevo (Entrega 2) | Carrito de compra (`carrito:{id_usuario}`, TTL 30 min) y oferta de inventario limitado (`oferta:{producto_id}:stock`/`:limite`/`:precio`/`:id` con el TTL de la oferta, más el hash `:reservas`; reservas de 1 min y consumo en el checkout, todo con scripts Lua atómicos). Ninguno de los dos es fuente de verdad del inventario real — ver `docs/decisiones/ADR-003-redis-carrito-y-oferta.md`. |
 | Neo4j | ✅ Nuevo (Entrega 2) | Grafo `(:Cuenta)-[:CALIFICO]->(:Producto)` para detección de fraude en reseñas. Ver `docs/decisiones/ADR-002-grafos-vs-columnar.md` para la justificación frente a la alternativa columnar (descartada por ahora). |
-| Migraciones | Script custom (`database/migrations/migracion_postgres_a_mongo.py`, `sembrar_resenas_fraude.py`) | No se introduce una herramienta de migraciones (Alembic, etc.) en esta fase; se evaluará si SQLAlchemy lo justifica más adelante. |
+| Elasticsearch | ✅ Nuevo (Entrega 3) | Buscador del catálogo: índice versionado detrás del alias `productos`, mapping propio (`database/elasticsearch/productos_indice.json`), proyección de solo lectura de la colección Mongo `productos`. Ver `docs/decisiones/ADR-004-motor-de-busqueda.md`. |
+| Consistencia del checkout | ✅ Entrega 3 | Tablas `checkout_idempotencia` y `eventos_sincronizacion` (outbox) en PostgreSQL. Ver `docs/estrategia-consistencia-checkout.md`. Evaluación NewSQL para pagos (no migrar) en `docs/decisiones/ADR-005-newsql-pagos.md`. |
+| Migraciones | Script custom (`database/migrations/migracion_postgres_a_mongo.py`, `sembrar_resenas_fraude.py`, `indexar_productos_elasticsearch.py`; SQL de migración en `database/postgres/migracion_*.sql`) | No se introduce una herramienta de migraciones (Alembic, etc.) en esta fase; se evaluará si SQLAlchemy lo justifica más adelante. |
 
 ## Historial de decisiones
 
@@ -358,3 +364,63 @@ frontend/app/
   como lista (`[...data]`), así que falla con "data is not iterable" y no
   carga el buscador de productos. Además, aunque se adapte a `data.items`,
   solo recibiría la primera página (24 productos).
+- 2026-10-05: **Entrega 3 — buscador con Elasticsearch.** Se agrega
+  Elasticsearch 8.15 (un nodo, `xpack.security` desactivado, heap de 512 MB)
+  a `docker-compose.yml`. Índice con mapping deliberado
+  (`database/elasticsearch/productos_indice.json`, `dynamic: strict`):
+  analizador en español sin acentos con `light_spanish` y un
+  `stemmer_override` para plurales en inglés ("laptops"), sinónimos solo al
+  buscar (`synonym_graph`), subcampo `edge_ngram` para autocompletar,
+  subcampo sin stemming para el corrector, `keyword` para facetas,
+  `flattened` para los 126 atributos variables y `scaled_float` para el
+  precio. Se consulta por un alias; `indexar_productos_elasticsearch.py`
+  crea un índice versionado, verifica la cantidad contra Mongo y mueve el
+  alias (reindexar sin cortar el servicio). `GET /api/busqueda` combina
+  fuzziness por campo, un puntaje fijo si lo buscado nombra una categoría
+  (sin él, una tablet "Wi-Fi + Celular" le ganaba a los celulares por el IDF
+  bajo de "Celulares"), frase exacta solo con 2+ palabras, prefijos y SKU;
+  devuelve facetas disyuntivas (post_filter + una agregación por faceta con
+  los filtros de las otras) y una sugerencia (`phrase suggester` en modo
+  `missing`, para no "corregir" palabras que sí existen, como "sony").
+  `GET /api/busqueda/autocompletar` para la barra de búsqueda. Si
+  Elasticsearch no responde, 503 `BUSCADOR_NO_DISPONIBLE` y el frontend
+  repite la búsqueda contra el `$text` de Mongo con un aviso. Guardar un
+  producto en el admin lo reindexa (o deja un evento en el outbox). Frontend:
+  autocompletado en `NavPublica.vue` (teclado ↑/↓/Enter/Esc) y
+  `ResultadosBusqueda.vue` con facetas, orden y "¿quisiste decir?".
+  Evidencia: con `$text`, "laptp", "audifnos", "celulr", "lapt" y
+  "auriculares" daban 0 resultados y "celular" solo tablets; con
+  Elasticsearch, `prueba_buscador.py --caida-real` 21/21. Ver ADR-004.
+- 2026-10-05: **Entrega 3 — estrategia de consistencia del checkout.**
+  `checkout.py` pasa a escribir en UNA transacción la clave de idempotencia
+  (`checkout_idempotencia`, primero, para que el índice único serialice dos
+  peticiones con la misma clave), el pedido (`sp_procesar_checkout`, sin
+  cambios) y los eventos del outbox (`eventos_sincronizacion`:
+  confirmar_reserva_oferta, limpiar_carrito, stock_mongo,
+  stock_elasticsearch, indexar_producto). Tras el COMMIT los procesa al
+  instante; lo que falla queda pendiente y lo reintenta un hilo de relevo
+  (`sincronizacion.py`, cada 15 s, espera exponencial de 5 s a 5 min,
+  `FOR UPDATE SKIP LOCKED`, 10 intentos y luego `fallido`), arrancado una
+  sola vez desde `main.py` (guarda `WERKZEUG_RUN_MAIN` por el reloader).
+  Todos los eventos son idempotentes (fijan valores absolutos leídos de
+  PostgreSQL, o un Lua que solo borra lo que no cambió). Reemplazan las
+  copias de "mejor esfuerzo" sin reintento del 2026-09-23. Hueco cerrado
+  durante las pruebas: si Redis fallaba tras el COMMIT, lo pagado quedaba en
+  el carrito y un checkout con OTRA clave lo cobraba otra vez; ahora todo
+  checkout aplica antes la limpieza pendiente de ese comprador (409
+  CARRITO_VACIO). Los errores se clasifican: negocio (SP) -> 400;
+  infraestructura (`OperationalError`, Redis) -> 503 con "no se realizó
+  ningún cobro". Fallas simuladas con `PERMITIR_FALLAS_SIMULADAS=1` (cinco
+  puntos). Frontend: clave de idempotencia por intento (se conserva entre
+  reintentos), aviso persistente según el tipo de falla y "Reintentar
+  compra", selector de falla simulada, `apiFetch` convierte un error de red
+  en `status 0 / SIN_CONEXION`, y una pestaña admin nueva, Sincronización
+  (`GestionSincronizacion.vue`). Migración
+  `database/postgres/migracion_entrega3_consistencia.sql` (también en el
+  DDL). Evidencia: `prueba_fallas_checkout.py --caida-real` 45/45,
+  incluida una caída real de Elasticsearch; además, recorrido en el
+  navegador (Edge headless con playwright-core) de autocompletado,
+  resultados con facetas, checkout con falla de PostgreSQL + reintento y
+  panel de Sincronización. Documentos:
+  `docs/estrategia-consistencia-checkout.md`, ADR-004, ADR-005 (NewSQL para
+  pagos: no migrar) e `informe-entrega-3.md`.
