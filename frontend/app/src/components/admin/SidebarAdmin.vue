@@ -32,8 +32,11 @@ function claseBoton(tab, tabActual) {
       <button @click="emit('cambiar-tab', 'catalogo')" :class="claseBoton('catalogo', tabActual)">
         <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span> {{ esVendedor ? "Mi catálogo" : "Catálogo" }}
       </button>
-      <button v-if="esVendedor" @click="emit('cambiar-tab', 'ventas')" :class="claseBoton('ventas', tabActual)">
+      <button @click="emit('cambiar-tab', 'ventas')" :class="claseBoton('ventas', tabActual)">
         <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span> Mis ventas
+      </button>
+      <button v-if="esVendedor" @click="emit('cambiar-tab', 'ofertas')" :class="claseBoton('ofertas', tabActual)">
+        <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span> Ofertas flash
       </button>
       <button v-if="!esVendedor" @click="emit('cambiar-tab', 'categorias')" :class="claseBoton('categorias', tabActual)">
         <span class="w-1.5 h-1.5 rounded-full bg-current opacity-60"></span> Categorías

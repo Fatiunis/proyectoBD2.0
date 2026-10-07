@@ -30,7 +30,7 @@ backend/
     config.py                 # load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, CARRITO_TTL_SEGUNDOS, RESERVA_OFERTA_TTL_SEGUNDOS, NEO4J_*, ELASTICSEARCH_URL, OUTBOX_*, PERMITIR_FALLAS_SIMULADAS
     extensions.py              # db (SQLAlchemy), Mongo (col_productos, col_historial, col_resenas), redis_client, neo4j_driver, es_client
     models.py                   # Usuario, Direccion, Categoria, Producto, Inventario, Pedido, LineaPedido, CheckoutIdempotencia, EventoSincronizacion
-    ofertas_redis.py             # keys, carga perezosa de los scripts Lua y wrappers de la oferta (compartido por ofertas, carrito y checkout)
+    ofertas_redis.py             # keys, carga perezosa de los scripts Lua y wrappers de la oferta (compartido por ofertas, carrito y checkout); pids_con_oferta_activa (SCAN, no KEYS)
     lua/                         # crear/consultar/reservar/liberar oferta, estado_linea, consumir/compensar/confirmar reserva (Entrega 2), limpiar_carrito_comprado (Entrega 3)
     busqueda_es.py               # Elasticsearch: documento del índice, indexar, búsqueda con facetas, autocompletado (Entrega 3)
     sincronizacion.py            # outbox del checkout: registrar/procesar eventos idempotentes + hilo de relevo (Entrega 3)
@@ -41,9 +41,9 @@ backend/
       direcciones.py            # /api/usuarios/<id_usuario>/direcciones (GET, POST; máx. 3) y .../<id_direccion> (PUT, DELETE)
       catalogo.py                # /api/categorias, /api/categorias/<id>/filtros, /api/productos (paginado), /api/productos/<id>
       historial.py                # /api/historial (feed paginado con filtros), /api/historial/<producto_id> (reconstrucción por fecha)
-      vendedores.py                # /api/vendedores/<id>/ventas
-      carrito.py                   # /api/carrito/<id_usuario> (Redis, Entrega 2)
-      ofertas.py                   # /api/ofertas (POST), /api/ofertas/<producto_id> (GET, DELETE), /api/ofertas/<producto_id>/reservar (Redis + Lua, Entrega 2)
+      vendedores.py                # /api/vendedores/<id>/ventas (?rol_solicitante=&id_usuario=; un vendedor solo ve las suyas)
+      carrito.py                   # /api/carrito/<id_usuario> (Redis, Entrega 2; sin expiración por defecto, CARRITO_TTL_SEGUNDOS > 0 la activa)
+      ofertas.py                   # /api/ofertas (POST; GET listado público con ?limite=), /api/ofertas/<producto_id> (GET, DELETE), /api/ofertas/<producto_id>/reservar, /api/vendedores/<id>/ofertas (Redis + Lua, Entrega 2; listados del 2026-10-07)
       resenas.py                   # /api/resenas (Mongo + sincronización a Neo4j, Entrega 2)
       fraude.py                    # /api/fraude/alertas (Cypher de varios saltos, Entrega 2)
       busqueda.py                  # /api/busqueda, /api/busqueda/autocompletar (Elasticsearch, Entrega 3)
@@ -104,9 +104,9 @@ frontend/app/
     style.css               # @import "tailwindcss"; + @theme (accent, Inter)
     router/index.js          # rutas "/", "/producto/:id" y "/admin/:tab?"
     views/
-      VistaPublica.vue        # sitio público real (catálogo, buscador con facetas, carrito, checkout, login/registro, "Mi cuenta")
-      VistaDetalleProducto.vue # página de producto (especificaciones, reseñas, oferta límite)
-      VistaAdmin.vue           # panel admin real (catálogo, categorías, usuarios, ventas, historial, fraude, sincronización)
+      VistaPublica.vue        # sitio público real (catálogo con franja de ofertas, buscador con facetas, ofertas flash, carrito, checkout, login/registro, "Mi cuenta")
+      VistaDetalleProducto.vue # página de producto (especificaciones, reseñas, oferta límite con precio de oferta y cuenta regresiva)
+      VistaAdmin.vue           # panel admin real (catálogo, categorías, usuarios, ventas, ofertas flash, historial, fraude, sincronización)
     components/publico/, components/admin/, components/comunes/, composables/, services/, utils/
   vite.config.js           # plugins: vue(), tailwindcss(); puerto 5173; server.watch.usePolling (OneDrive)
   README.md                # cómo levantar dev/build
@@ -118,7 +118,7 @@ frontend/app/
 |---|---|---|
 | PostgreSQL | Sin cambios de motor | Sigue siendo la fuente transaccional (usuarios, pedidos, checkout vía stored procedure). |
 | MongoDB | Sin cambios de motor | Sigue siendo el catálogo de productos + historial (event sourcing); Entrega 2 le agrega la colección `resenas`. |
-| Redis | ✅ Nuevo (Entrega 2) | Carrito de compra (`carrito:{id_usuario}`, TTL 30 min) y oferta de inventario limitado (`oferta:{producto_id}:stock`/`:limite`/`:precio`/`:id` con el TTL de la oferta, más el hash `:reservas`; reservas de 1 min y consumo en el checkout, todo con scripts Lua atómicos). Ninguno de los dos es fuente de verdad del inventario real — ver `docs/decisiones/ADR-003-redis-carrito-y-oferta.md`. |
+| Redis | ✅ Nuevo (Entrega 2) | Carrito de compra (`carrito:{id_usuario}`; TTL de 30 min por inactividad en la Entrega 2, sin expiración por defecto desde el 2026-10-07 y configurable con `CARRITO_TTL_SEGUNDOS`) y oferta de inventario limitado (`oferta:{producto_id}:stock`/`:limite`/`:precio`/`:id` con el TTL de la oferta, más el hash `:reservas`; reservas de 1 min y consumo en el checkout, todo con scripts Lua atómicos). Ninguno de los dos es fuente de verdad del inventario real — ver `docs/decisiones/ADR-003-redis-carrito-y-oferta.md` y, para el carrito sin expiración por defecto, `docs/decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md`. |
 | Neo4j | ✅ Nuevo (Entrega 2) | Grafo `(:Cuenta)-[:CALIFICO]->(:Producto)` para detección de fraude en reseñas. Ver `docs/decisiones/ADR-002-grafos-vs-columnar.md` para la justificación frente a la alternativa columnar (descartada por ahora). |
 | Elasticsearch | ✅ Nuevo (Entrega 3) | Buscador del catálogo: índice versionado detrás del alias `productos`, mapping propio (`database/elasticsearch/productos_indice.json`), proyección de solo lectura de la colección Mongo `productos`. Ver `docs/decisiones/ADR-004-motor-de-busqueda.md`. |
 | Consistencia del checkout | ✅ Entrega 3 | Tablas `checkout_idempotencia` y `eventos_sincronizacion` (outbox) en PostgreSQL. Ver `docs/estrategia-consistencia-checkout.md`. Evaluación NewSQL para pagos (no migrar) en `docs/decisiones/ADR-005-newsql-pagos.md`. |
@@ -173,7 +173,8 @@ frontend/app/
   la base real: 10 compradores nuevos insertados sin colisión.
 - 2026-09-13: se completa el carrito de compra sobre Redis
   (`backend/app/blueprints/carrito.py`): hash `carrito:{id_usuario}`,
-  TTL de 1800s renovado en cada operación (`EXPIRE`). `useCarrito.js` se
+  TTL de 1800s renovado en cada operación (`EXPIRE`; desde el 2026-10-07
+  el valor por defecto es sin expiración, ver esa entrada). `useCarrito.js` se
   migra de `localStorage` a este backend conservando su interfaz pública
   intacta (mutación optimista local + `apiFetch` en segundo plano); el
   carrito ahora requiere sesión iniciada (ya no hay carrito anónimo).
@@ -460,3 +461,103 @@ frontend/app/
   Después se cerraron H-012 (página enorme → `200` vacío, no `500`), H-014
   (el Historial pagina con los filtros aplicados) y H-015 (stock de PROD-0004
   y PROD-0014 ajustado desde PostgreSQL); queda abierto H-013.
+- 2026-10-07: **Ofertas flash visibles en el sitio y carrito sin expiración
+  por defecto** (en el árbol de trabajo, sin commit). (1) **Listados de
+  ofertas**: hasta ahora una oferta solo se podía consultar por producto
+  (`GET /api/ofertas/<producto_id>`), así que el comprador no tenía cómo
+  enterarse de que existía. `ofertas.py` agrega `GET /api/ofertas` (público,
+  `?limite=` de 1 a 100, `400` fuera de rango; devuelve `{ofertas, total}`,
+  primero las que tienen cupo y luego por vencimiento, con `descuento_pct`,
+  `categoria` y `vendedor`) y `GET /api/vendedores/<id>/ofertas` (exige
+  `rol_solicitante` e `id_usuario`; un vendedor solo ve las suyas). Vive en
+  `ofertas.py` y no en `vendedores.py` para reutilizar los helpers de ofertas
+  sin imports cruzados. Ambos parten de
+  `ofertas_redis.pids_con_oferta_activa()`, que recorre `oferta:*:id` con
+  `SCAN` (no `KEYS`, que recorre todas las claves en una sola operación y
+  bloquea Redis mientras tanto); después hacen un solo `find` en MongoDB
+  con esos productos y confirman cada oferta con `consultar_oferta.lua`,
+  porque una oferta puede vencer entre el `SCAN` y la lectura. Las ofertas
+  activas son pocas, así que no hace falta un índice aparte en Redis.
+  `POST /api/ofertas` devuelve también `descuento_pct`, redondeado a entero
+  sobre el `precio_base` de Mongo. (2) **`GET /api/vendedores/<id>/ventas`**
+  exige ahora `rol_solicitante` e `id_usuario` (`403`/`400`; un vendedor
+  solo ve las suyas), con el mismo criterio que el listado de ofertas.
+  Antes cualquiera podía pedir las ventas de cualquier vendedor. Sigue sin
+  haber verificación criptográfica (es tema de la entrega final). (3)
+  **Frontend**: botón "Ofertas" con contador en `NavPublica.vue`, página
+  `OfertasFlash.vue` (`/?vista=ofertas`, filtro por categoría y orden),
+  `FranjaOfertasFlash.vue` encima del catálogo, y bloque de precio de
+  oferta con cuenta regresiva en `VistaDetalleProducto.vue` (escucha el
+  evento `cambio-oferta` de `OfertaLimitada.vue`, así que no hace una
+  consulta aparte). Los tres primeros comparten una sola consulta con
+  `composables/useOfertasFlash.js` (la pide con el mayor `limite` que
+  necesite algún componente montado y la repite cada 20 s). En el panel, la
+  pestaña "Ofertas flash" del vendedor (`GestionOfertas.vue`,
+  `/admin/ofertas`) lista, crea y finaliza ofertas; "Mis ventas" se muestra
+  también al administrador (con las ventas de los productos que él
+  publicó); `ModalAdmin.vue` se cierra con Escape. `utils/descuento.js`
+  muestra como máximo 99 % mientras el precio de oferta sea mayor que 0
+  (el backend puede devolver `descuento_pct` 100 por redondeo, ver H-017).
+  (4) **Carrito**: `CARRITO_TTL_SEGUNDOS` pasa de `1800` a `0` por defecto.
+  Con `0` el carrito no expira y `renovar_ttl_carrito()` le hace `PERSIST`
+  en cada operación (también al reservar una oferta), así que un carrito
+  que tenía TTL de la configuración anterior deja de vencer; con un valor
+  mayor que 0 vuelve el `EXPIRE` por inactividad de la Entrega 2. Las
+  reservas de oferta siguen venciendo con `RESERVA_OFERTA_TTL_SEGUNDOS`.
+  Como el enunciado pide expiración por inactividad, queda como decisión a
+  confirmar por el equipo (H-016). Verificado contra el backend y Redis
+  locales: `GET /api/ofertas` con una oferta temporal sobre PROD-0001
+  devolvió los campos descritos (y `total` 1), `limite=0` → `400`, el
+  listado del vendedor 2 pedido por el vendedor 3 → `403` y por él mismo →
+  `200`, ventas sin `rol_solicitante` → `403` y sin `id_usuario` → `400`,
+  y un carrito de prueba con TTL 120 quedó con TTL -1 (sin expiración)
+  tras un `GET /api/carrito`. La oferta y el carrito de prueba se borraron
+  después. Sin verificación visual en el navegador.
+- 2026-10-07 (más tarde): **decisiones del equipo y rediseño de las
+  ofertas en el catálogo** (en el árbol de trabajo, sin commit). (1)
+  **Carrito**: el equipo decidió mantener `CARRITO_TTL_SEGUNDOS=0` por
+  defecto y se registró en `docs/decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md`,
+  que reemplaza ese punto de la Decisión 1 de ADR-003 (ADR-003 lleva una
+  nota). Por qué se acepta pese al enunciado: la expiración sigue
+  configurándose explícitamente con la variable, las reservas de oferta
+  siguen venciendo con `RESERVA_OFERTA_TTL_SEGUNDOS`, y para demostrar la
+  expiración por inactividad se pone un valor mayor que 0 en el `.env`.
+  H-016 queda "decidido: se mantiene". (2) **`descuento_pct`**: H-017
+  corregido. `_descuento_pct` (`ofertas.py`) redondea con `ROUND_HALF_UP`
+  y acota a `min(99, max(0, ...))`: una oferta siempre cobra algo (el
+  backend rechaza `precio_oferta` <= 0), así que nunca se reporta 100 %;
+  el piso 0 cubre un `precio_base` editado por debajo del precio de
+  oferta. `GET /api/ofertas/<producto_id>` devuelve ahora también
+  `descuento_pct` (`null` si no hay `precio_base`). `utils/descuento.js`
+  usa el valor del servidor cuando viene y, si no, lo calcula con el mismo
+  redondeo en centavos enteros (con floats, `(1 - 1749/2200) * 100` da
+  20,4999… y quedaría en 20 en vez de 21); `OfertaLimitada.vue` y
+  `VistaDetalleProducto.vue` muestran el `descuento_pct` del servidor y
+  "Sin límite de tiempo" cuando `segundos_restantes` es `null`. (3)
+  **Franja de ofertas**: `FranjaOfertasFlash.vue` pasa de
+  `VistaPublica.vue` a `CatalogoProductos.vue`, en la columna derecha
+  encima de la grilla, para que el menú de categorías siga siempre a la
+  vista; `CatalogoProductos` emite `ver-ofertas` y `VistaPublica` abre la
+  página de ofertas. Es compacta y oscura para que destaque sobre el
+  catálogo blanco (degradado `from-accent-900 via-accent-800
+  to-accent-900`, texto blanco, acentos ámbar y tarjetas `bg-white/10`;
+  tokens nuevos `--color-accent-800` y `--color-accent-900` en el `@theme`
+  de `src/style.css`), se contrae a una línea con el estado guardado en
+  `sessionStorage` (`tiendaya_franja_ofertas_contraida`) y no se muestra
+  si no hay ofertas vigentes. Pide `limite=100` (no solo las 12 que
+  muestra) para que `TarjetaProducto.vue` pueda marcar cualquier producto
+  en oferta con la misma petición: `useOfertasFlash.js` exporta
+  `ofertaDisponible` y `ofertaActivaDe`, y la tarjeta muestra la etiqueta
+  "⚡ -X%" y el precio de oferta. Verificado contra el backend local:
+  `GET /api/ofertas/PROD-0007` devolvió `descuento_pct` 15 (Q9520 sobre
+  Q11 200), y `_descuento_pct` llamado desde el venv dio 99 para Q1 sobre
+  Q12 500, 0 para Q13 000 sobre Q12 500 y 21 para Q1749 sobre Q2200. Los
+  estilos de la franja se comprobaron en el código, sin verificación
+  visual en el navegador. (4) **H-018**: en los resultados de búsqueda la
+  etiqueta "⚡ -X%" solo marcaba una oferta, porque ahí el único suscriptor
+  de `useOfertasFlash` era la barra, con `limite: 1`. `NavPublica.vue` se
+  suscribe ahora con `limite: 100` (sigue siendo una sola petición) y su
+  contador cuenta solo las ofertas disponibles, igual que la franja.
+  Verificado con `npm run build` y `GET /api/ofertas?limite=100`. Resumen
+  de la verificación del día en `docs/hallazgos.md` ("Verificación del
+  2026-10-07").

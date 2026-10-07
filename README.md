@@ -4,12 +4,35 @@ Portal de comercio electrónico con arquitectura de datos políglota (proyecto d
 
 - **PostgreSQL**: usuarios/autenticación, direcciones, categorías, pedidos, líneas de pedido, pagos, inventario, y el procedimiento transaccional de checkout.
 - **MongoDB**: catálogo de productos (atributos polimórficos por categoría), historial de cambios (event sourcing) y reseñas de producto.
-- **Redis**: carrito de compra (expira por inactividad) y la oferta de inventario limitado (reserva atómica, sin sobreventa bajo concurrencia).
+- **Redis**: carrito de compra (expiración por inactividad configurable con `CARRITO_TTL_SEGUNDOS`; por defecto, desde el 2026-10-07, no expira) y la oferta de inventario limitado (reserva atómica, sin sobreventa bajo concurrencia).
 - **Neo4j**: grafo de reseñas para detectar fraude (cuentas que se califican entre sí de forma reiterada sobre los mismos productos).
 - **Elasticsearch**: buscador del catálogo (tolerancia a errores de tipeo, sinónimos, autocompletado, relevancia y filtros facetados), alimentado desde MongoDB.
 - **Consistencia del checkout**: una transacción en PostgreSQL con clave de idempotencia y un *outbox* de eventos que se reintentan hacia Redis, MongoDB y Elasticsearch ([estrategia](docs/estrategia-consistencia-checkout.md)).
 - **Backend**: Flask con application factory (`backend/main.py` → `backend/app/create_app()`), organizado en **Blueprints** por dominio y **SQLAlchemy** para todo el acceso a PostgreSQL. Expone una API REST consumida por el frontend.
-- **Frontend**: **Vue 3 + Vite + Tailwind v4** (`frontend/app/`) — sitio público (catálogo paginado, carrito, checkout, reseñas, oferta límite, "Mi cuenta" del comprador, buscador con facetas) y panel admin (catálogo, categorías, usuarios, ventas, historial, fraude, sincronización).
+- **Frontend**: **Vue 3 + Vite + Tailwind v4** (`frontend/app/`) — sitio público (catálogo paginado, carrito, checkout, reseñas, oferta límite, página de ofertas flash, "Mi cuenta" del comprador, buscador con facetas) y panel admin (catálogo, categorías, usuarios, ventas, ofertas flash del vendedor, historial, fraude, sincronización).
+
+## Novedades después de la Entrega 3 (2026-10-07)
+
+Son cambios sobre lo entregado en la Entrega 3 (no son de la Entrega 4). Para ponerte al día:
+
+1. **`git pull`**. No hay dependencias nuevas de Python ni de npm, ni migraciones de base de datos.
+2. **Revisa `CARRITO_TTL_SEGUNDOS` en tu `.env`**. El valor por defecto pasó de `1800` a `0` (el carrito no expira), pero si copiaste el `.env.example` anterior tu `.env` sigue diciendo `1800`, y ese valor manda sobre el de por defecto: tu carrito seguirá expirando a los 30 minutos de inactividad. Pon `0` si quieres el comportamiento nuevo, o déjalo en un valor mayor que 0 si quieres que expire (por ejemplo, para demostrar la expiración por inactividad de la Entrega 2). La decisión y su justificación están en [ADR-006](docs/decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md).
+3. Reinicia el backend (`python backend/main.py`) y Vite (`npm run dev` en `frontend/app/`). En Windows, si Vite falla con `listen EACCES` en el 5173, levántalo con `npm run dev -- --port 5300` (ver el paso 7).
+
+Qué se construyó, en concreto:
+- **Ofertas flash visibles en el sitio público**. Antes, una oferta de inventario limitado solo se veía si el comprador entraba a la página de ese producto. Ahora:
+  - La barra de navegación tiene un botón **"Ofertas"** con un contador de las ofertas disponibles (con cupo y sin terminar).
+  - Ese botón abre la **página de ofertas flash** (`/?vista=ofertas`), con todas las ofertas activas, filtro por categoría y orden "Terminan pronto" o "Mayor descuento". Las agotadas aparecen como "Agotada".
+  - **Los filtros de la página de ofertas no son los del sidebar del catálogo.** Los de ofertas (categoría y orden) se aplican en el navegador sobre la única consulta a `GET /api/ofertas?limite=100`, que no acepta parámetros de filtro; no se guardan al salir de la vista. Los del sidebar del catálogo (categoría y atributos, con selección y rango) se aplican en el servidor, con `GET /api/productos?categoria_id=…&atributo_…`, sobre MongoDB. No están conectados: la franja de ofertas muestra siempre todas las ofertas vigentes, sin importar la categoría elegida en el sidebar, aunque la etiqueta "⚡ -X%" sí aparece en las tarjetas que el filtro deja pasar. Detalle en [`frontend/app/README.md`](frontend/app/README.md#ofertas-flash).
+  - En el catálogo aparece una **franja de ofertas** compacta (`FranjaOfertasFlash.vue`, dentro de `CatalogoProductos.vue`): ocupa la columna derecha, encima de la grilla de productos, así que el menú de categorías de la izquierda sigue siempre a la vista. Es oscura para que destaque: degradado verde oliva oscuro, texto blanco y acentos ámbar. Muestra hasta 12 ofertas con desplazamiento lateral y un enlace "Ver todas" a la página de ofertas. Se puede contraer a una sola línea ("N ofertas flash activas"); ese estado se recuerda durante la sesión del navegador (`sessionStorage`, clave `tiendaya_franja_ofertas_contraida`). Si no hay ofertas vigentes, la franja no se muestra.
+  - Las **tarjetas del catálogo** de un producto con oferta vigente muestran una etiqueta "⚡ -X%" sobre la imagen y el precio de oferta junto al precio normal tachado (`TarjetaProducto.vue`, con `ofertaActivaDe` de `useOfertasFlash.js`, sin pedir nada más al servidor).
+  - En la **página del producto**, si tiene una oferta activa, el precio se reemplaza por un bloque con el precio de oferta, el precio normal tachado, el % de descuento, el ahorro, las unidades que quedan y una **cuenta regresiva** hasta el fin de la oferta (o "Sin límite de tiempo" si la oferta no tiene vencimiento, es decir, si `segundos_restantes` viene `null`). El % de descuento es el `descuento_pct` que calcula el servidor. El botón "Reservar a precio de oferta" lleva al bloque de reserva, que funciona igual que antes. Abajo se sigue pudiendo comprar a precio normal.
+  - Lo respalda un endpoint público nuevo, **`GET /api/ofertas`** (sin autenticación). Devuelve `{ofertas, total}`: las ofertas activas de productos activos, primero las que todavía tienen cupo y después las agotadas, y dentro de cada grupo las que vencen antes. Cada oferta trae nombre, imagen, `precio_base`, `precio_oferta`, `descuento_pct`, cupo, unidades restantes, reservadas y vendidas, `segundos_restantes`, `fecha_fin`, `categoria` y `vendedor`. Acepta `?limite=` de 1 a 100 (100 por defecto; otro valor responde `400`); `total` cuenta todas las ofertas activas, antes de recortar. `descuento_pct` es un entero: el porcentaje sobre el `precio_base` de MongoDB, redondeado hacia arriba desde ,5 (`ROUND_HALF_UP`) y acotado entre 0 y 99, para que una oferta que cobra algo nunca aparezca como -100 % ([H-017](docs/hallazgos.md)); vale `null` si el producto no tiene `precio_base`. `GET /api/ofertas/<producto_id>` (la oferta de un producto) devuelve ahora también `descuento_pct`, con el mismo cálculo. Para encontrarlas, el backend recorre las claves `oferta:*:id` de Redis con `SCAN` (no con `KEYS`, que bloquea Redis mientras recorre todas las claves), busca esos productos en MongoDB y confirma cada oferta con `consultar_oferta.lua` (`ofertas_redis.pids_con_oferta_activa`). El frontend comparte una sola consulta entre el botón, la franja, las tarjetas del catálogo y la página (`composables/useOfertasFlash.js`; la barra, la franja y la página la piden con `limite=100`, así que las tarjetas de cualquier vista pública, también la de búsqueda, conocen todas las ofertas, [H-018](docs/hallazgos.md)) y la repite cada 20 s.
+- **Pestaña "Ofertas flash" del vendedor** (`/admin/ofertas`, solo vendedor). Muestra sus ofertas activas con un resumen (ofertas activas, unidades vendidas y restantes), cuenta regresiva y botón para finalizar cada una, y un formulario para crear una nueva: se elige el producto, el precio de oferta (o un % de descuento), el cupo y la duración. Se actualiza cada 15 s. Lo respalda **`GET /api/vendedores/<id>/ofertas?rol_solicitante=...&id_usuario=...`**: un vendedor solo puede ver las suyas (`403` si pide las de otro); un administrador puede consultar las de cualquier vendedor. Crear y finalizar siguen usando `POST /api/ofertas` y `DELETE /api/ofertas/<producto_id>`, como desde la página del producto. `POST /api/ofertas` ahora devuelve también `descuento_pct`.
+- **"Mis ventas" también para el administrador**. Antes solo la veía el vendedor. El administrador ve las ventas de los productos que él mismo publicó (los que tienen su usuario como vendedor). **Cambia el contrato**: `GET /api/vendedores/<id>/ventas` ahora exige `?rol_solicitante=vendedor|administrador&id_usuario=<id>`. Sin `rol_solicitante` válido responde `403`, sin `id_usuario` entero `400`, y un vendedor que pide las ventas de otro, `403`.
+- **Los modales del panel admin se cierran con Escape** (`ModalAdmin.vue`).
+- **Carrito sin expiración por defecto**. `CARRITO_TTL_SEGUNDOS` pasa a valer `0` si no se define: el carrito no expira, y cada lectura o escritura le quita el TTL que pudiera tener (`PERSIST`). Así, un carrito que quedó con TTL de la configuración anterior deja de vencer. Un valor mayor que 0 vuelve a activar la expiración por inactividad, igual que en la Entrega 2 (el TTL se renueva en cada operación). Las líneas de oferta del carrito siguen venciendo a los `RESERVA_OFERTA_TTL_SEGUNDOS` (60 s), pase lo que pase con el carrito.
+  - **Decidido por el equipo (2026-10-07)**: el enunciado pide un "carrito de compra persistente por sesión, con expiración automática por inactividad" y "un tiempo de expiración configurado explícitamente" (criterio de 1.5 puntos de la Entrega 2). Se mantiene `0` por defecto: la expiración sigue configurándose explícitamente con la variable, las reservas de oferta siguen venciendo solas, y para demostrar la expiración se pone un valor mayor que 0 en el `.env` (por ejemplo `1800`). Justificación en [ADR-006](docs/decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md), que reemplaza ese punto de ADR-003; antecedente en [H-016](docs/hallazgos.md).
 
 ## Novedades de la Entrega 3 (léelo si ya tenías el proyecto montado de antes)
 
@@ -58,8 +81,8 @@ Si ya tenías TiendaYa corriendo de una entrega anterior, esto es lo que se agre
 5. Sigue los pasos **5 en adelante** de la sección de Instalación (levantar Redis/Neo4j, aplicar constraints, sembrar compradores y reseñas de prueba) — son pasos nuevos que no existían antes.
 
 Qué se construyó, en concreto:
-- **Carrito de compra**: ya no vive en `localStorage`, vive en Redis (`carrito:{id_usuario}`, expira a los 30 min de inactividad). Requiere sesión iniciada. El checkout toma los productos de ese carrito en Redis (no de lo que envía el navegador), así que un carrito expirado ya no se puede pagar. La referencia de pago la genera el backend automáticamente (formato `TY-AAAAMMDDHHMMSS-XXXXXX`). Al confirmar la compra se muestra un resumen con el número de pedido, la referencia y un botón "Dejar reseña" por cada producto comprado.
-- **Oferta de inventario limitado** ("flash sale"): cupo independiente por producto en Redis, con una **duración** que se indica al crearla (la oferta vence sola al terminar esa ventana de tiempo), reservado con un script Lua atómico (sin sobreventa, verificado con 50 solicitudes concurrentes contra un límite de 10 → 10 éxitos, 0 sobreventa). Se crea y se cierra desde la página de detalle del producto; solo puede hacerlo el vendedor dueño del producto o un administrador.
+- **Carrito de compra**: ya no vive en `localStorage`, vive en Redis (`carrito:{id_usuario}`, expira a los 30 min de inactividad; desde el 2026-10-07, por defecto no expira, ver "Novedades después de la Entrega 3"). Requiere sesión iniciada. El checkout toma los productos de ese carrito en Redis (no de lo que envía el navegador), así que un carrito expirado ya no se puede pagar. La referencia de pago la genera el backend automáticamente (formato `TY-AAAAMMDDHHMMSS-XXXXXX`). Al confirmar la compra se muestra un resumen con el número de pedido, la referencia y un botón "Dejar reseña" por cada producto comprado.
+- **Oferta de inventario limitado** ("flash sale"): cupo independiente por producto en Redis, con una **duración** que se indica al crearla (la oferta vence sola al terminar esa ventana de tiempo), reservado con un script Lua atómico (sin sobreventa, verificado con 50 solicitudes concurrentes contra un límite de 10 → 10 éxitos, 0 sobreventa). Se crea y se cierra desde la página de detalle del producto (y, desde el 2026-10-07, también desde la pestaña "Ofertas flash" del panel del vendedor); solo puede hacerlo el vendedor dueño del producto o un administrador.
   - **Precio de oferta**: al crear la oferta se fija un `precio_oferta`, que debe ser menor que el precio normal. **No se puede editar**: para cambiarlo, hay que finalizar la oferta y crear otra. La página del producto muestra el precio de oferta, el normal tachado y el % de descuento.
   - **Reserva de 1 minuto en el carrito**: "Reservar y agregar al carrito" aparta las unidades y agrega al carrito una línea aparte, marcada "Oferta relámpago", con el precio de oferta, la cantidad fija y una cuenta regresiva. Si no se compra en ese tiempo (`RESERVA_OFERTA_TTL_SEGUNDOS`, 60 por defecto), la línea sale del carrito y las unidades vuelven a la oferta. Quitar la línea o vaciar el carrito también las libera de inmediato. Cada comprador puede tener una sola reserva activa por oferta.
   - **El cupo se descuenta al comprar, no al reservar**: el checkout confirma la reserva en Redis (Lua), cobra el precio de oferta y descuenta también el inventario real de PostgreSQL. Si la reserva ya venció, el checkout responde 409 (`RESERVA_OFERTA_EXPIRADA`) y quita la línea. Si PostgreSQL falla, las unidades vuelven a la oferta. Una línea normal y una de oferta del mismo producto pueden convivir en el carrito; el stock se valida sumando las dos.
@@ -88,6 +111,8 @@ Qué se construyó, en concreto:
 
 **Entrega 3** — completa: buscador sobre Elasticsearch (tolerancia a errores, autocompletado, facetas), estrategia de consistencia del checkout (idempotencia, compensación y outbox con reintentos) con prueba de falla simulada, y evaluación NewSQL para pagos (ver "Novedades de la Entrega 3" arriba e informe en [`docs/informe-entrega-3.md`](docs/informe-entrega-3.md)).
 
+**Después de la Entrega 3 (2026-10-07)** — ofertas flash visibles en el sitio público y pestaña de ofertas del vendedor, "Mis ventas" para el administrador y carrito sin expiración por defecto (decidido en [ADR-006](docs/decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md)). Ver "Novedades después de la Entrega 3" arriba.
+
 **Informe de la Entrega 1:** [`docs/Entrega 1 Base de Datos 2 (1).pdf`](<docs/Entrega 1 Base de Datos 2 (1).pdf>) (diagrama entidad-relación, justificación de la normalización y decisiones de embeber/referenciar).
 
 **Hallazgos de las pruebas:** los errores y pendientes que encontramos al probar (con su estado, cómo reproducirlos y la corrección propuesta) se registran en [`docs/hallazgos.md`](docs/hallazgos.md). Revísalo antes de reportar un error, por si ya está anotado.
@@ -101,6 +126,7 @@ Qué se construyó, en concreto:
 - Elasticsearch y Redis corren sin autenticación, y Neo4j solo con su usuario por defecto (el control de acceso es tema de la entrega final).
 - La oferta de inventario limitado (cupo, precio y reservas) vive en Redis. Es un cupo aparte del inventario real, pero al confirmar la compra las unidades vendidas en oferta **sí** se descuentan del `inventario` de PostgreSQL, igual que una compra normal.
 - El precio de oferta se valida al crearla contra el `precio_base` de MongoDB, y en el checkout contra el de PostgreSQL. Si un producto se editó solo en Mongo y los dos precios no coinciden, una oferta que se creó sin problema puede fallar al pagar. En ese caso el checkout devuelve las unidades a la oferta.
+- Con el valor por defecto (`CARRITO_TTL_SEGUNDOS=0`) el carrito no expira, así que los carritos abandonados no se borran solos y ocupan memoria en Redis. Para que expiren por inactividad hay que poner un valor mayor que 0 en el `.env` ([ADR-006](docs/decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md)). Las reservas de oferta del carrito sí vencen siempre.
 - La sincronización de una reseña hacia Neo4j es de mejor esfuerzo (sin 2PC): si Neo4j no está disponible al crear la reseña, esta igual queda guardada en Mongo y solo se registra una advertencia en el log del backend.
 - El historial de cambios del producto no registra el stock: cada evento guarda nombre, descripción, precio, estado activo/inactivo y atributos. La reconstrucción por fecha indica si el producto estaba disponible para la venta (activo), pero no cuántas unidades había en existencia en ese momento.
 
@@ -148,7 +174,9 @@ MONGO_URI=mongodb://localhost:27017/
 MONGO_DB_NAME=tiendaya_nosql
 
 REDIS_URL=redis://localhost:6379/0
-CARRITO_TTL_SEGUNDOS=1800
+# Segundos de inactividad tras los que expira un carrito (se renueva en cada operación).
+# 0 = el carrito no expira (valor por defecto); por ejemplo 1800 = 30 minutos
+CARRITO_TTL_SEGUNDOS=0
 # Segundos que una reserva de oferta relámpago queda apartada en el carrito (opcional, 60 por defecto)
 RESERVA_OFERTA_TTL_SEGUNDOS=60
 
@@ -166,6 +194,8 @@ PERMITIR_FALLAS_SIMULADAS=0
 ```
 
 `.env` está en `.gitignore` — nunca lo subas al repositorio.
+
+Sobre `CARRITO_TTL_SEGUNDOS`: con `0` (o un valor negativo) el carrito no expira, y cada operación le quita el TTL que tuviera (`PERSIST`). Con un valor mayor que 0, el carrito expira tras ese tiempo **sin actividad**, porque el TTL se renueva en cada lectura o escritura. Las reservas de oferta del carrito vencen aparte, con `RESERVA_OFERTA_TTL_SEGUNDOS`. El enunciado pide expiración por inactividad: si vas a demostrar ese requerimiento, usa un valor mayor que 0 (por qué el valor por defecto es `0`: [ADR-006](docs/decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md)).
 
 Ojo con `MONGO_DB_NAME`: el backend no la lee, se conecta siempre a la base `tiendaya_nosql` (fijo en `backend/app/extensions.py`). Solo la usan `database/migrations/migracion_postgres_a_mongo.py`, `database/migrations/sembrar_resenas_fraude.py` y el comando del índice del paso 4 (el indexador de Elasticsearch usa la conexión del backend). Si la cambias, esos scripts escribirían en una base que el backend no ve, así que déjala en `tiendaya_nosql`.
 
@@ -343,11 +373,25 @@ npm install
 npm run dev
 ```
 
-Vite queda escuchando en `http://localhost:5173` (o el siguiente puerto libre si ese ya está en uso) y habla con el backend en `http://127.0.0.1:8000`. Rutas: `/` sitio público (catálogo paginado, buscador con autocompletado y facetas, carrito, checkout, login/registro y "Mi cuenta" del comprador), `/producto/:id` detalle de producto (reseñas y oferta de inventario limitado si el producto tiene una activa), `/admin` panel admin (catálogo, categorías, usuarios, ventas, historial, fraude y sincronización; estas dos últimas, solo para administrador).
+Vite queda escuchando en `http://localhost:5173` (o el siguiente puerto libre si ese ya está en uso) y habla con el backend en `http://127.0.0.1:8000`. Rutas: `/` sitio público (catálogo paginado con la franja de ofertas flash encima de la grilla y la etiqueta de descuento en las tarjetas con oferta, buscador con autocompletado y facetas, página de ofertas flash, carrito, checkout, login/registro y "Mi cuenta" del comprador; las vistas sin URL propia se abren desde otra página con `/?vista=ofertas`, `/?vista=carrito`, etc.), `/producto/:id` detalle de producto (reseñas y, si el producto tiene una oferta activa, el precio de oferta con cuenta regresiva y el bloque de reserva), `/admin/:tab?` panel admin (catálogo, categorías, usuarios, "Mis ventas", ofertas flash, historial, fraude y sincronización; "Ofertas flash" solo para vendedor, y categorías, usuarios, fraude y sincronización solo para administrador).
 
 Para un build de producción: `npm run build` (genera `frontend/app/dist/`).
 
 **Si el repositorio está dentro de OneDrive** (o en otra carpeta sincronizada): `vite.config.js` usa `server.watch.usePolling`, porque OneDrive no siempre avisa de los cambios en los archivos y Vite podía seguir sirviendo versiones viejas de algunos módulos (por ejemplo, un carrito que no se vaciaba al comprar). Si igual ves un comportamiento que no coincide con el código, detén Vite, vuelve a correr `npm run dev` y recarga el navegador con **Ctrl+F5**.
+
+**Si Vite no arranca en Windows con `listen EACCES: permission denied`** (en `::1:5173` o `127.0.0.1:5173`): al arrancar Docker Desktop, Hyper-V/WSL reserva rangos de puertos, y a veces uno de ellos incluye el 5173. Vite solo pasa al siguiente puerto cuando el 5173 está *ocupado*, no cuando está *reservado*, así que falla en vez de cambiar de puerto. Para ver los rangos reservados (cambian en cada reinicio):
+
+```bash
+netsh interface ipv4 show excludedportrange protocol=tcp
+```
+
+Si el 5173 cae dentro de uno, levanta Vite en un puerto que quede fuera de todos los rangos, por ejemplo:
+
+```bash
+npm run dev -- --port 5300
+```
+
+El backend tiene CORS abierto a cualquier origen (`CORS(app)` en `backend/app/__init__.py`), así que el frontend funciona igual desde otro puerto. En macOS/Linux esto no pasa.
 
 ## Credenciales de prueba
 
@@ -355,8 +399,8 @@ Todos los usuarios semilla usan la misma contraseña: **`Tiendaya123!`**
 
 | Email | Rol | Notas |
 |---|---|---|
-| admin@tiendaya.com | administrador | Acceso completo a `/admin` (catálogo, categorías, usuarios, historial, fraude, sincronización) |
-| ventas@techstore.com | vendedor | Acceso a `/admin` acotado a su propio catálogo y "Mis ventas" (sin Categorías/Usuarios/Fraude/Sincronización) |
+| admin@tiendaya.com | administrador | Acceso completo a `/admin` (catálogo, categorías, usuarios, "Mis ventas" de los productos que publicó, historial, fraude, sincronización); no tiene la pestaña "Ofertas flash", pero puede crear o cerrar ofertas desde la página de cualquier producto |
+| ventas@techstore.com | vendedor | Acceso a `/admin` acotado a su propio catálogo, "Mis ventas", "Ofertas flash" e historial (sin Categorías/Usuarios/Fraude/Sincronización) |
 | contacto@modaurbana.com | vendedor | Igual que el anterior |
 | carlos.mendez@email.com | comprador | Dirección de envío registrada; "Mi cuenta" con pedidos, perfil y direcciones |
 | sofia.lopez@email.com | comprador | Dirección de envío registrada |
@@ -422,7 +466,7 @@ backend/
     models.py                      Modelos SQLAlchemy: Usuario, Direccion, Categoria, Producto, Inventario, Pedido, LineaPedido, CheckoutIdempotencia, EventoSincronizacion
     busqueda_es.py                Elasticsearch: documento del índice, indexar, búsqueda con facetas, autocompletado (Entrega 3)
     sincronizacion.py             Outbox del checkout: registrar y procesar eventos idempotentes + hilo de relevo (Entrega 3)
-    ofertas_redis.py              Keys, carga de scripts Lua y wrappers de la oferta (compartido por ofertas, carrito y checkout)
+    ofertas_redis.py              Keys, carga de scripts Lua y wrappers de la oferta (compartido por ofertas, carrito y checkout); pids_con_oferta_activa (SCAN de oferta:*:id)
     lua/
       crear_oferta.lua               Crea cupo, límite, precio e id de la oferta en un solo paso (mismo TTL)
       consultar_oferta.lua            Estado de la oferta: disponible, reservado, vendido y la reserva del usuario
@@ -442,9 +486,9 @@ backend/
       busqueda.py                     /api/busqueda, /api/busqueda/autocompletar (Elasticsearch, Entrega 3)
       sincronizacion.py               /api/sincronizacion/eventos, /procesar, /reintentar-fallidos (panel admin del outbox, Entrega 3)
       historial.py                     /api/historial (feed paginado con filtros), /api/historial/<producto_id> (reconstrucción por fecha)
-      vendedores.py                     /api/vendedores/<id>/ventas
-      carrito.py                        /api/carrito/<id_usuario> (Redis, Entrega 2)
-      ofertas.py                        /api/ofertas, /api/ofertas/<producto_id>, /api/ofertas/<producto_id>/reservar (precio de oferta + reserva de 1 min; Redis + Lua, Entrega 2)
+      vendedores.py                     /api/vendedores/<id>/ventas (exige rol_solicitante e id_usuario; un vendedor solo ve las suyas)
+      carrito.py                        /api/carrito/<id_usuario> (Redis, Entrega 2; por defecto no expira, CARRITO_TTL_SEGUNDOS > 0 activa la expiración)
+      ofertas.py                        /api/ofertas (POST crear; GET listado público de ofertas activas), /api/ofertas/<producto_id> (GET, DELETE), /api/ofertas/<producto_id>/reservar, /api/vendedores/<id>/ofertas (ofertas del vendedor) (precio de oferta + reserva de 1 min; Redis + Lua, Entrega 2)
       resenas.py                        /api/resenas (Mongo + sync a Neo4j, Entrega 2)
       fraude.py                         /api/fraude/alertas (consulta Cypher de 3 saltos, Entrega 2)
   scripts/
@@ -476,11 +520,12 @@ frontend/
   app/                        Sitio Vue 3 + Vite (único frontend, ver docs/STACK.md)
     src/
       views/                       VistaPublica.vue, VistaDetalleProducto.vue, VistaAdmin.vue
-      components/publico/           Catálogo, filtros, tarjeta de producto, carrito, checkout, login/registro, reseñas, oferta límite, PerfilComprador ("Mi cuenta"), ResultadosBusqueda (facetas)
+      components/publico/           Catálogo, filtros, tarjeta de producto, carrito, checkout, login/registro, reseñas, oferta límite, PerfilComprador ("Mi cuenta"), ResultadosBusqueda (facetas), ofertas flash (OfertasFlash.vue, FranjaOfertasFlash.vue, TarjetaOfertaPublica.vue)
       components/comunes/            Paginacion.vue (compartido por el catálogo público, el del admin, los resultados de búsqueda y el historial)
-      components/admin/              Catálogo, categorías, usuarios, ventas, historial, fraude (GestionFraude.vue), sincronización (GestionSincronizacion.vue)
-      composables/                    useSesion, useToast, useCategorias, useCarrito (Redis-backed, Entrega 2)
+      components/admin/              Catálogo, categorías, usuarios, ventas, ofertas flash del vendedor (GestionOfertas.vue, FormularioOferta.vue, TarjetaOferta.vue), historial, fraude (GestionFraude.vue), sincronización (GestionSincronizacion.vue), ModalAdmin.vue (se cierra con Escape)
+      composables/                    useSesion, useToast, useCategorias, useCarrito (Redis-backed, Entrega 2), useOfertasFlash (una sola consulta a GET /api/ofertas para la barra, la franja, las tarjetas del catálogo y la página; exporta ofertaDisponible y ofertaActivaDe)
       services/api.js                 apiFetch (wrapper de fetch contra el backend)
+      utils/                          categoriaVisual.js, tiempo.js (formatoMinSeg, formatoCuentaRegresiva), descuento.js (% de descuento: usa el descuento_pct del servidor si viene; si no, lo calcula con el mismo redondeo half-up, en centavos enteros; entre 0 y 99 mientras se cobre algo)
 docs/
   STACK.md                   Bitácora técnica completa: qué cambió en cada fase, por qué, y qué se verificó
   arquitectura.md            Diagrama de arquitectura actualizado (Entrega 3)

@@ -6,6 +6,7 @@ import LoginAdmin from "../components/admin/LoginAdmin.vue";
 import SidebarAdmin from "../components/admin/SidebarAdmin.vue";
 import GestionProductos from "../components/admin/GestionProductos.vue";
 import GestionVentas from "../components/admin/GestionVentas.vue";
+import GestionOfertas from "../components/admin/GestionOfertas.vue";
 import GestionCategorias from "../components/admin/GestionCategorias.vue";
 import GestionUsuarios from "../components/admin/GestionUsuarios.vue";
 import HistorialProducto from "../components/admin/HistorialProducto.vue";
@@ -13,7 +14,7 @@ import GestionFraude from "../components/admin/GestionFraude.vue";
 import GestionSincronizacion from "../components/admin/GestionSincronizacion.vue";
 
 const ROLES_CON_ACCESO = ["administrador", "vendedor"];
-const TABS_VALIDOS = ["catalogo", "categorias", "usuarios", "ventas", "historial", "fraude", "sincronizacion"];
+const TABS_VALIDOS = ["catalogo", "categorias", "usuarios", "ventas", "ofertas", "historial", "fraude", "sincronizacion"];
 
 const props = defineProps({ tab: { type: String, default: null } });
 
@@ -25,8 +26,8 @@ const esVendedor = computed(() => sesion.value?.rol === "vendedor");
 
 const tabActual = computed(() => {
   if (!TABS_VALIDOS.includes(props.tab)) return "catalogo";
-  if (esVendedor.value && !["catalogo", "ventas", "historial"].includes(props.tab)) return "catalogo";
-  if (!esVendedor.value && props.tab === "ventas") return "catalogo";
+  if (esVendedor.value && !["catalogo", "ventas", "ofertas", "historial"].includes(props.tab)) return "catalogo";
+  if (!esVendedor.value && props.tab === "ofertas") return "catalogo";
   return props.tab;
 });
 
@@ -41,7 +42,8 @@ function cambiarTab(tab) {
     <SidebarAdmin :tab-actual="tabActual" :es-vendedor="esVendedor" @cambiar-tab="cambiarTab" />
     <main class="ml-60 p-8 max-w-[1800px]">
       <GestionProductos v-if="tabActual === 'catalogo'" />
-      <GestionVentas v-else-if="tabActual === 'ventas' && esVendedor" />
+      <GestionVentas v-else-if="tabActual === 'ventas'" />
+      <GestionOfertas v-else-if="tabActual === 'ofertas' && esVendedor" />
       <GestionCategorias v-else-if="tabActual === 'categorias' && !esVendedor" />
       <GestionUsuarios v-else-if="tabActual === 'usuarios' && !esVendedor" />
       <HistorialProducto v-else-if="tabActual === 'historial'" />

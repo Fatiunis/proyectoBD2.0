@@ -1,9 +1,10 @@
 <script setup>
-import { ref, watch } from "vue";
+import { ref, computed, watch } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import { apiFetch } from "../../services/api";
 import { useSesion } from "../../composables/useSesion";
 import { useCarrito } from "../../composables/useCarrito";
+import { useOfertasFlash, ofertaDisponible } from "../../composables/useOfertasFlash";
 
 const props = defineProps({
   vistaActual: { type: String, required: true },
@@ -17,6 +18,11 @@ const emit = defineEmits(["cambiar-vista", "buscar"]);
 const router = useRouter();
 const { sesion, limpiarSesion } = useSesion();
 const { cantidadTotal } = useCarrito();
+// Se pide la lista completa (no solo el total): con la nav montada en todas las
+// vistas públicas, así ofertaActivaDe() de las tarjetas conoce todas las ofertas
+// (H-018), y el contador cuenta solo las disponibles, igual que la franja.
+const { ofertas } = useOfertasFlash({ limite: 100 });
+const totalOfertas = computed(() => ofertas.value.filter((o) => ofertaDisponible(o)).length);
 
 // Autocompletado (Entrega 3): mientras se escribe se piden sugerencias a
 // GET /api/busqueda/autocompletar (Elasticsearch, edge n-grams + fuzziness).
@@ -151,6 +157,17 @@ function cerrarSesion() {
 
     <div class="flex items-center gap-1 shrink-0">
       <button @click="emit('cambiar-vista', 'catalogo')" class="px-4 py-2 text-neutral-300 hover:text-white text-sm font-medium tracking-tight transition">Catálogo</button>
+
+      <button
+        @click="emit('cambiar-vista', 'ofertas')"
+        :aria-current="vistaActual === 'ofertas' ? 'page' : undefined"
+        :aria-label="totalOfertas > 0 ? `Ofertas flash, ${totalOfertas} activas` : 'Ofertas flash'"
+        :class="['relative flex items-center gap-1.5 px-4 py-2 text-sm font-semibold tracking-tight transition', vistaActual === 'ofertas' ? 'text-white' : 'text-neutral-300 hover:text-white']"
+      >
+        <svg viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4 text-amber-400" aria-hidden="true"><path d="M13 2 4.5 13.5H11L10 22l8.5-11.5H12L13 2Z"/></svg>
+        Ofertas
+        <span v-if="totalOfertas > 0" class="absolute -top-0.5 right-0 min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-amber-400 text-amber-950 text-[10px] font-bold flex items-center justify-center" aria-hidden="true">{{ totalOfertas }}</span>
+      </button>
 
       <button @click="emit('cambiar-vista', 'carrito')" class="relative px-4 py-2 text-neutral-300 hover:text-white text-sm font-medium tracking-tight transition">
         Carrito

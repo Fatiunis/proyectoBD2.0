@@ -8,7 +8,20 @@ Este archivo registra los errores, pendientes y discrepancias que aparecen al pr
 
 **Cómo se cierra una entrada:** no se borra. Se cambia el estado a `corregido en <commit o archivo>` (o `descartado (motivo)`) y se completa "Corrección" con lo que se cambió. Si el hallazgo revela una limitación que se decidió aceptar, se agrega también a "Limitaciones conocidas" del [`README.md`](../README.md).
 
-Los números de línea de las causas de H-001 a H-009 se refieren al código del commit `785789d` (2026-10-06). Los de H-010 en adelante, y los de las correcciones, se refieren al árbol de trabajo del 2026-10-06 (correcciones todavía sin commit).
+Los números de línea de las causas de H-001 a H-009 se refieren al código del commit `785789d` (2026-10-06). Los de H-010 a H-015, y los de las correcciones, se refieren al árbol de trabajo del 2026-10-06 (correcciones todavía sin commit). Los de H-016 en adelante, al árbol de trabajo del 2026-10-07 (sobre el commit `06994dd`, con cambios sin commit).
+
+## Verificación del 2026-10-07 (ofertas flash, ventas y carrito)
+
+Corrida del agente de pruebas sobre el árbol de trabajo del 2026-10-07 (sin commit), con H-017 corregido:
+
+- `descuento_pct` coincide en `POST /api/ofertas`, `GET /api/ofertas/<producto_id>`, el listado público `GET /api/ofertas` y el listado del vendedor `GET /api/vendedores/<id>/ofertas` (PROD-0002, Q2200 → Q1749: 21 en los cuatro).
+- Tope de 99: una oferta de Q0.01 devuelve `descuento_pct` 99. `precio_oferta` 0 o negativo responde `400`, así que un 100 % no es alcanzable, tampoco en el frontend.
+- `python backend/scripts/prueba_concurrencia_oferta.py`: PASS (10 reservas aceptadas y 40 rechazadas, sin sobreventa).
+- `python backend/scripts/prueba_buscador.py`: 18/18 PASS (sin `--caida-real`).
+- `npm run build` (en `frontend/app/`): OK.
+- Distribución de la franja de ofertas en pantallas `lg` (columna derecha, encima de la grilla): verificada leyendo el código, sin navegador.
+- Redis quedó limpio salvo las 3 ofertas de prueba (PROD-0007, PROD-0012 y PROD-0013).
+- Hallazgo nuevo: H-018 (corregido el mismo día).
 
 ## Re-verificación del 2026-10-06 (después de las correcciones)
 
@@ -29,6 +42,33 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - Verificación general de la API: 158 casos, 155 OK. Los 3 restantes son hallazgos menores (H-002, H-003 y H-004). Hubo además 1 falso positivo: `DELETE /api/carrito/<id_usuario>/items/<id_producto>` con un producto que no está en el carrito responde `200` a propósito, porque la operación es idempotente (`backend/app/blueprints/carrito.py:202-216`).
 - Consistencia entre motores: 1015 productos en PostgreSQL, en MongoDB y en el alias `productos` de Elasticsearch. Outbox: 18 eventos procesados, 0 pendientes y 0 fallidos.
 - `npm run build` (en `frontend/app/`): OK.
+
+## H-018 — En los resultados de búsqueda, la etiqueta de oferta solo marca una oferta (2026-10-07)
+- **Estado:** corregido en el árbol de trabajo (`frontend/app/src/components/publico/NavPublica.vue`; 2026-10-07, sin commit)
+- **Severidad:** menor
+- **Área:** frontend
+- **Síntoma:** en los resultados de búsqueda, la etiqueta "⚡ -X%" de `TarjetaProducto.vue` aparece solo en un producto en oferta, aunque haya varias ofertas vigentes. Debería aparecer en todos los productos con oferta vigente, como en el catálogo.
+- **Cómo reproducirlo:** con las ofertas vigentes de PROD-0007, PROD-0012 y PROD-0013, abrir `/?q=monitor`: PROD-0012 y PROD-0013 salen sin etiqueta. `curl "http://127.0.0.1:8000/api/ofertas?limite=1"` trae solo PROD-0007, con `total` 3.
+- **Causa:** `useOfertasFlash.js` hace la consulta con el mayor `limite` de los componentes montados. En los resultados de búsqueda no se monta la franja (`limite: 100`), y el único suscriptor es el botón "Ofertas" de `frontend/app/src/components/publico/NavPublica.vue:21`, con `limite: 1`. `ofertaActivaDe` solo encuentra las ofertas cargadas.
+- **Corrección:** `NavPublica.vue:24` se suscribe con `useOfertasFlash({ limite: 100 })` (comentario en las líneas 21-23). Como la barra está montada en todas las vistas públicas, el estado compartido tiene siempre todas las ofertas y `ofertaActivaDe` las encuentra también en los resultados de búsqueda; sigue siendo una sola petición cada 20 s. Además, el contador del botón "Ofertas" (`NavPublica.vue:25`) cuenta solo las ofertas disponibles (`ofertaDisponible`: con cupo y sin terminar), igual que el "N activas" de la franja, en vez del `total` del backend, que incluye las agotadas. De paso, el botón "Ver →" de la franja contraída tiene `aria-label` "Ver todas las ofertas flash" (`FranjaOfertasFlash.vue:162`). Verificado con `npm run build` y `GET /api/ofertas?limite=100` (3 ofertas); falta la prueba visual en el navegador.
+
+## H-017 — `descuento_pct` puede valer 100 aunque la oferta cobre algo (2026-10-07)
+- **Estado:** corregido en el árbol de trabajo (`backend/app/blueprints/ofertas.py`, `_descuento_pct`; 2026-10-07, sin commit)
+- **Severidad:** menor
+- **Área:** backend
+- **Síntoma:** con un precio de oferta muy bajo frente al precio normal, `POST /api/ofertas` y `GET /api/ofertas` devuelven `"descuento_pct": 100`, aunque el producto no es gratis. La interfaz muestra 99 %, porque `frontend/app/src/utils/descuento.js:15` limita el porcentaje a 99 mientras el precio de oferta sea mayor que 0. Un cliente de la API que use el valor tal cual mostraría "-100 %".
+- **Cómo reproducirlo:** crear una oferta sobre PROD-0001 (precio normal Q12 500) con `"precio_oferta": 1` (`POST /api/ofertas` con `rol_solicitante: "administrador"`) y ver `descuento_pct` en la respuesta y en `GET /api/ofertas`. Se reprodujo así el 2026-10-07; la oferta se finalizó después.
+- **Causa:** `backend/app/blueprints/ofertas.py:136` redondea el porcentaje al entero más cercano (99,992 → 100) sin el tope que aplica el frontend.
+- **Corrección:** `_descuento_pct` (`backend/app/blueprints/ofertas.py:126-140`) redondea con `ROUND_HALF_UP` y acota el resultado con piso 0 y tope 99: `min(99, max(0, ...))`. Como el backend ya rechaza `precio_oferta` menor o igual que 0, una oferta siempre cobra algo y el tope de 99 aplica en todos los casos. El piso 0 cubre el caso de un `precio_base` editado en Mongo por debajo del precio de oferta. Lo usan `POST /api/ofertas`, `GET /api/ofertas`, `GET /api/ofertas/<producto_id>` y `GET /api/vendedores/<id>/ofertas`. `frontend/app/src/utils/descuento.js` usa el `descuento_pct` del servidor cuando viene y aplica el mismo tope. Verificado el 2026-10-07 llamando a la función con el venv: Q1 sobre Q12 500 → 99; Q13 000 sobre Q12 500 → 0; Q1749 sobre Q2200 → 21; sin `precio_base` → `None`.
+
+## H-016 — Con el valor por defecto nuevo, el carrito no expira, y el enunciado pide expiración por inactividad (2026-10-07)
+- **Estado:** decidido: se mantiene (2026-10-07, ver [ADR-006](decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md))
+- **Severidad:** bloqueante (para la nota de la Entrega 2, no para el funcionamiento)
+- **Área:** backend
+- **Síntoma:** desde el 2026-10-07, si `CARRITO_TTL_SEGUNDOS` no está definida o vale `0`, el carrito no expira: cada operación le quita el TTL (`PERSIST`). El enunciado (`docs/Proyecto_TiendaYa_BasesDeDatos2.pdf`, Entrega 2) pide "carrito de compra persistente por sesión, con expiración automática por inactividad" y "un tiempo de expiración configurado explícitamente y su efecto documentado sobre el flujo de checkout"; la rúbrica le asigna 1.5 puntos a "Implementación del carrito sobre el almacén clave-valor, con expiración justificada". La expiración sigue siendo configurable (con un valor mayor que 0 funciona como en la Entrega 2), pero quien instale el proyecto desde cero con el `.env.example` actual tendrá un carrito sin expiración, y la evidencia del [informe de la Entrega 2](informe-entrega-2.md) (TTL de 1799 s) no se reproduce con ese valor.
+- **Cómo reproducirlo:** con `CARRITO_TTL_SEGUNDOS=0` en el `.env` (el del `.env.example`), agregar un producto al carrito y correr `docker compose exec redis redis-cli TTL carrito:<id_usuario>`: responde `-1` (sin expiración). Verificado el 2026-10-07 con un carrito de prueba al que se le puso TTL 120: después de `GET /api/carrito/<id>` quedó en `-1`.
+- **Causa:** `backend/app/config.py:25` (valor por defecto `"0"`), `.env.example` (`CARRITO_TTL_SEGUNDOS=0`) y `renovar_ttl_carrito()` en `backend/app/blueprints/carrito.py:47-57`.
+- **Corrección:** sin cambio de código. Se plantearon dos opciones: volver a un valor por defecto mayor que 0 (por ejemplo `1800`), o mantener `0` y justificarlo en un ADR nuevo. El equipo decidió el 2026-10-07 **mantener `0` por defecto** y lo registró en [ADR-006](decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md), que reemplaza ese punto de la Decisión 1 de [ADR-003](decisiones/ADR-003-redis-carrito-y-oferta.md) (ADR-003 lleva una nota que remite a ADR-006). La expiración por inactividad sigue configurándose explícitamente con `CARRITO_TTL_SEGUNDOS` (un valor mayor que 0 hace `EXPIRE` en cada operación, como en la Entrega 2), las reservas de oferta siguen venciendo con `RESERVA_OFERTA_TTL_SEGUNDOS`, y para demostrar la expiración se pone un valor mayor que 0 en el `.env`. La limitación (carritos abandonados que no se borran solos con el valor por defecto) quedó en "Limitaciones conocidas" del README. El README, `docs/STACK.md`, `docs/arquitectura.md` y el informe de la Entrega 2 remiten a ADR-006.
 
 ## H-015 — Stock de PROD-0004 y PROD-0014 desfasado entre PostgreSQL y MongoDB/Elasticsearch (2026-10-06)
 - **Estado:** corregido en la base local (2026-10-06), con un ajuste de datos, sin cambio de código
@@ -135,6 +175,8 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
   - Sección 4.3 describe `GET /api/productos` como una lista; desde la Entrega 2 devuelve `{items, total, pagina, por_pagina, total_paginas}`.
 
   Y no menciona: el buscador con Elasticsearch (`busqueda.py`, `busqueda_es.py`, `ResultadosBusqueda.vue`, autocompletado en `NavPublica.vue`, facetas, "¿Quisiste decir…?" y respaldo a MongoDB), la clave de idempotencia y el botón "Reintentar compra", el outbox con su relevo y el panel Sincronización, las fallas simuladas y los scripts de prueba, la paginación, "Mi cuenta" completo (perfil y direcciones, máximo 3, `409`), las filas de Búsqueda y Sincronización en la tabla de la sección 3, ni los enlaces a `docs/estrategia-consistencia-checkout.md`, ADR-004, ADR-005, `docs/informe-entrega-3.md` y `docs/evidencia/`.
+
+  Actualización del 2026-10-07: tampoco cubre los cambios posteriores a la Entrega 3: el listado público de ofertas (`GET /api/ofertas`, botón "Ofertas" de la barra, página de ofertas flash y franja encima del catálogo; `ofertas.py`, `ofertas_redis.py`, `OfertasFlash.vue`, `FranjaOfertasFlash.vue`, `TarjetaOfertaPublica.vue`, `useOfertasFlash.js`), el precio de oferta con cuenta regresiva en la página del producto (`VistaDetalleProducto.vue`), la pestaña "Ofertas flash" del vendedor (`GET /api/vendedores/<id>/ofertas`, `GestionOfertas.vue`, `FormularioOferta.vue`, `TarjetaOferta.vue`), "Mis ventas" para el administrador con `rol_solicitante` e `id_usuario` obligatorios, y el carrito sin expiración por defecto (`CARRITO_TTL_SEGUNDOS=0`, ver H-016 y ADR-006). Si la guía describe el carrito como "expira a los 30 minutos", eso ya no es el valor por defecto. Tampoco cubre la franja de ofertas dentro de `CatalogoProductos.vue` (encima de la grilla, contraíble), la etiqueta "⚡ -X%" en `TarjetaProducto.vue`, los filtros de la página de ofertas (en el navegador, distintos de los del sidebar del catálogo) ni `descuento_pct` en `GET /api/ofertas/<producto_id>`.
 - **Cómo reproducirlo:** abrir `docs/guia-funcionalidades.docx` y compararlo con el README y el código citado.
 - **Causa:** la guía se generó con el estado de la Entrega 2 (commit `07e8bde`) y no se actualizó con la Entrega 3.
 - **Corrección (propuesta):** regenerar la guía con los puntos de arriba. Es un archivo binario: no se edita a mano desde el repositorio; lo decide y coordina el orquestador.

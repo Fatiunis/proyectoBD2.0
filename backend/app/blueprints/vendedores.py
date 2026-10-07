@@ -1,13 +1,31 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 from ..extensions import db
 from ..models import LineaPedido, Pedido, Producto
 
 bp = Blueprint("vendedores", __name__)
 
+# Mismos roles y mensajes que listar_ofertas_vendedor (ofertas.py); se copia la
+# constante en vez de importarla para no acoplar blueprints entre sí.
+ROLES_VALIDOS = ("vendedor", "administrador")
+
 
 @bp.route("/api/vendedores/<int:id_vendedor>/ventas", methods=["GET"])
 def get_ventas_vendedor(id_vendedor):
+    """?rol_solicitante=vendedor|administrador&id_usuario=<int>
+    Un vendedor solo ve sus propias ventas; el administrador puede consultar cualquiera."""
+    rol_solicitante = request.args.get("rol_solicitante")
+    if rol_solicitante not in ROLES_VALIDOS:
+        return jsonify({"error": "rol_solicitante debe ser 'vendedor' o 'administrador'"}), 403
+
+    try:
+        id_usuario = int(request.args.get("id_usuario"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "id_usuario es obligatorio y debe ser un entero"}), 400
+
+    if rol_solicitante == "vendedor" and id_usuario != id_vendedor:
+        return jsonify({"error": "Solo puedes ver tus propias ventas"}), 403
+
     try:
         filas = (
             db.session.query(LineaPedido, Pedido)

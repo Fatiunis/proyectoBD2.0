@@ -2,6 +2,8 @@
 
 Fecha: 2026-09-22 (documenta decisiones tomadas el 2026-09-13, al iniciar la Entrega 2). Actualizado el 2026-09-23: la oferta pasó a tener precio de oferta y reserva temporal en el carrito, y el cupo se descuenta al comprar.
 
+> **Reemplazado en parte por [ADR-006](ADR-006-carrito-sin-expiracion-por-defecto.md) (2026-10-07):** el valor por defecto de `CARRITO_TTL_SEGUNDOS` de la Decisión 1 pasó de `1800` a `0`: el carrito no expira por defecto, y con un valor mayor que 0 se comporta exactamente como describe la Decisión 1. El resto de este ADR sigue vigente y no se reescribe.
+
 Este registro cubre las dos funcionalidades de la Entrega 2 que se asignaron a un almacén clave-valor. Aunque ambas terminan en Redis, se evalúan por separado porque el problema de fondo es distinto: el carrito es un problema de **patrón de acceso sobre datos transitorios**; la oferta es un problema de **concurrencia sobre un contador compartido**.
 
 ---

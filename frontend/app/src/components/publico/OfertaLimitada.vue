@@ -5,12 +5,15 @@ import { useSesion } from "../../composables/useSesion";
 import { useToast } from "../../composables/useToast";
 import { useCarrito } from "../../composables/useCarrito";
 import { formatoMinSeg } from "../../utils/tiempo";
+import { porcentajeDescuento } from "../../utils/descuento";
 
 const props = defineProps({
   productoId: { type: String, required: true },
   idVendedor: { type: Number, default: null },
   precioBase: { type: Number, default: null },
 });
+
+const emit = defineEmits(["cambio-oferta"]);
 
 const { sesion } = useSesion();
 const { toast } = useToast();
@@ -45,6 +48,7 @@ const porcentaje = computed(() => {
   return Math.round((oferta.value.stock_restante / oferta.value.cantidad_limite) * 100);
 });
 const segundosRestantes = computed(() => Math.max(0, Math.ceil((finMs.value - ahora.value) / 1000)));
+const sinLimite = computed(() => segundosRestantes.value === Infinity);
 const tiempoRestante = computed(() => {
   const s = segundosRestantes.value;
   const dosDigitos = (n) => String(n).padStart(2, "0");
@@ -54,7 +58,7 @@ const tiempoRestante = computed(() => {
   return `${dosDigitos(Math.floor(s / 60))}:${dosDigitos(s % 60)}`;
 });
 const horaFin = computed(() => {
-  if (!oferta.value) return "";
+  if (!oferta.value || sinLimite.value) return "";
   // fecha_fin trae offset explícito, así que representa el instante exacto sin depender del reloj del cliente.
   const fin = oferta.value.fecha_fin ? new Date(oferta.value.fecha_fin) : new Date(finMs.value);
   return fin.toLocaleString("es-GT", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Guatemala" });
@@ -63,13 +67,13 @@ const horaFin = computed(() => {
 const reservaUsuario = computed(() => oferta.value?.reserva_usuario || null);
 const segundosReserva = computed(() => Math.max(0, Math.ceil((finReservaMs.value - ahora.value) / 1000)));
 
-function descuento(precioOferta, precioBase) {
+function descuento(precioOferta, precioBase, pctServidor = null) {
   if (!precioOferta || !precioBase) return 0;
-  return Math.round((1 - precioOferta / precioBase) * 100);
+  return porcentajeDescuento(precioOferta, precioBase, pctServidor);
 }
 
 const descuentoOferta = computed(() =>
-  oferta.value ? descuento(oferta.value.precio_oferta, oferta.value.precio_base) : 0
+  oferta.value ? descuento(oferta.value.precio_oferta, oferta.value.precio_base, oferta.value.descuento_pct) : 0
 );
 
 const precioNuevoValido = computed(() => {
@@ -125,7 +129,7 @@ async function cargarOferta(id) {
     oferta.value = data;
     terminada.value = false;
     ahora.value = Date.now();
-    finMs.value = ahora.value + (data.segundos_restantes || 0) * 1000;
+    finMs.value = data.segundos_restantes == null ? Infinity : ahora.value + data.segundos_restantes * 1000;
     if (data.reserva_usuario) {
       finReservaMs.value = ahora.value + (data.reserva_usuario.segundos_restantes || 0) * 1000;
       if (data.reserva_usuario.segundos_restantes > 0) reservaVencidaAvisada = false;
@@ -150,6 +154,7 @@ async function iniciar(id) {
 }
 
 watch(() => props.productoId, (id) => id && iniciar(id), { immediate: true });
+watch(oferta, (valor) => emit("cambio-oferta", valor));
 watch(() => sesion.value?.id_usuario, () => props.productoId && cargarOferta(props.productoId));
 onUnmounted(detenerTemporizador);
 
@@ -245,7 +250,8 @@ async function finalizarOferta() {
         Quedan {{ oferta.stock_restante }} de {{ oferta.cantidad_limite }} unidades
       </p>
 
-      <div class="flex items-baseline justify-between gap-3 text-xs">
+      <p v-if="sinLimite" class="text-xs font-semibold text-neutral-950">Sin límite de tiempo</p>
+      <div v-else class="flex items-baseline justify-between gap-3 text-xs">
         <p class="font-semibold text-neutral-950">Termina en <span class="tabular-nums">{{ tiempoRestante }}</span></p>
         <p class="text-neutral-400">Finaliza el {{ horaFin }}</p>
       </div>

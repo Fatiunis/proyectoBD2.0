@@ -4,10 +4,13 @@ import { apiFetch } from "../../services/api";
 import FiltrosCatalogo from "./FiltrosCatalogo.vue";
 import TarjetaProducto from "./TarjetaProducto.vue";
 import Paginacion from "../comunes/Paginacion.vue";
+import FranjaOfertasFlash from "./FranjaOfertasFlash.vue";
 
 const props = defineProps({
   busqueda: { type: String, default: "" },
 });
+
+const emit = defineEmits(["ver-ofertas"]);
 
 const categoriasDisponibles = ref([]);
 const categoriaSeleccionada = ref("");
@@ -121,17 +124,20 @@ onMounted(async () => {
       <FiltrosCatalogo :filtros="esquemaFiltrosActual" :valores="valoresFiltros" @cambiar="onCambiarFiltros" @limpiar="limpiarFiltrosAtributos" />
     </aside>
 
-    <div class="flex-1 min-w-0" ref="contenedorGrilla">
+    <!-- En lg la columna mide como mucho el alto de la ventana: la franja y la
+         paginación toman lo suyo y la grilla se encoge y hace scroll en el resto. -->
+    <div class="flex-1 min-w-0 pt-6 lg:pt-0 lg:flex lg:flex-col lg:max-h-[calc(100vh-7rem)]" ref="contenedorGrilla">
+      <FranjaOfertasFlash class="lg:shrink-0" @ver-todas="emit('ver-ofertas')" />
       <div
         v-if="productos.length > 0"
-        class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-x-6 gap-y-12 pt-6 lg:pt-0 pb-6 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:pr-2 scrollbar-fina"
+        class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-x-6 gap-y-12 pb-6 lg:min-h-0 lg:overflow-y-auto lg:pr-2 scrollbar-fina"
       >
         <TarjetaProducto v-for="p in productos" :key="p._id" :producto="p" />
       </div>
       <div v-else-if="cargado" class="text-center py-24 text-neutral-400">
         <p class="text-sm font-medium">No se encontraron productos con estos filtros.</p>
       </div>
-      <Paginacion :total="total" :pagina="pagina" :por-pagina="POR_PAGINA" @cambiar-pagina="onCambiarPagina" />
+      <Paginacion class="lg:shrink-0" :total="total" :pagina="pagina" :por-pagina="POR_PAGINA" @cambiar-pagina="onCambiarPagina" />
     </div>
   </section>
 </template>

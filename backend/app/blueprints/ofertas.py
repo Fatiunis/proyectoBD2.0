@@ -1,14 +1,14 @@
 import json
 from datetime import datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 import redis
 from flask import Blueprint, request, jsonify
 
 from .. import ofertas_redis
-from ..config import CARRITO_TTL_SEGUNDOS, RESERVA_OFERTA_TTL_SEGUNDOS
+from ..config import RESERVA_OFERTA_TTL_SEGUNDOS
 from ..extensions import redis_client, col_productos, ZONA_GUATEMALA
-from .carrito import _clave_carrito
+from .carrito import _clave_carrito, renovar_ttl_carrito
 
 bp = Blueprint("ofertas", __name__)
 
@@ -47,8 +47,15 @@ bp = Blueprint("ofertas", __name__)
 # Propiedad: solo el vendedor dueño del producto (vendedor.id_vendedor en el
 # documento de Mongo) o un administrador pueden crear/finalizar su oferta.
 # Solo un comprador puede reservar.
+#
+# Listados: GET /api/ofertas es PÚBLICO (sin autenticación) y devuelve todas
+# las ofertas activas de productos activos para el sitio público; GET
+# /api/vendedores/<id>/ofertas devuelve solo las del vendedor. Ambos salen de
+# _ofertas_activas (SCAN de Redis + Mongo + consultar_oferta.lua por oferta).
 
 ROLES_VALIDOS = ("vendedor", "administrador")
+
+LIMITE_LISTADO_PUBLICO_MAXIMO = 100
 
 DURACION_MINIMA_MINUTOS = 1
 DURACION_MAXIMA_MINUTOS = 10080  # 7 días
@@ -116,6 +123,23 @@ def _validar_propietario(producto, rol_solicitante, id_usuario):
     return None
 
 
+def _descuento_pct(precio_oferta, precio_base):
+    # Porcentaje entero redondeado sobre el precio_base de Mongo; None si no
+    # hay base válida (no se puede calcular sin inventar un número).
+    try:
+        base = Decimal(str(precio_base))
+        oferta = Decimal(str(precio_oferta))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not base.is_finite() or not oferta.is_finite() or base <= 0:
+        return None
+    # Piso 0: si el precio_base se editó por debajo del precio de oferta, no
+    # se reporta un "descuento" negativo. Tope 99 (H-017): un descuento > 0
+    # nunca se muestra como 100 % (p. ej. Q1 sobre Q12 500); coherente con
+    # frontend/app/src/utils/descuento.js.
+    return min(99, max(0, int(((base - oferta) / base * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))))
+
+
 def _imagen_portada(producto):
     imagenes = producto.get("imagenes") or []
     for img in imagenes:
@@ -124,6 +148,71 @@ def _imagen_portada(producto):
     if imagenes and isinstance(imagenes[0], dict):
         return imagenes[0].get("url")
     return None
+
+
+def _ofertas_activas(filtro_mongo, incluir_catalogo=False):
+    """Arma la lista de ofertas activas cuyos productos cumplen filtro_mongo.
+
+    Las ofertas activas son pocas: SCAN de oferta:*:id y luego un solo find
+    en Mongo con los pids encontrados más el filtro del llamador. Con
+    incluir_catalogo se agregan categoria y vendedor (listado público).
+    Las RedisError se propagan para que el endpoint responda 500."""
+    pids = ofertas_redis.pids_con_oferta_activa()
+    if not pids:
+        return []
+
+    proyeccion = {"nombre": 1, "precio_base": 1, "imagenes": 1}
+    if incluir_catalogo:
+        proyeccion.update({"categoria": 1, "vendedor": 1})
+    cursor = col_productos.find({**filtro_mongo, "_id": {"$in": pids}}, proyeccion)
+    productos = {p["_id"]: p for p in cursor}
+
+    ofertas = []
+    for pid, producto in productos.items():
+        # consultar_oferta.lua da la foto atómica (y purga reservas
+        # vencidas). None = la oferta venció entre el SCAN y esta lectura.
+        oferta = ofertas_redis.consultar(pid)
+        if oferta is None:
+            continue
+        # TTL -1 = key sin expiración: se reporta None (ver obtener_oferta).
+        ttl_ms = oferta["ttl_ms"]
+        segundos_restantes = ofertas_redis.segundos_desde_ms(ttl_ms) if ttl_ms >= 0 else None
+        precio_base = producto.get("precio_base")
+        item = {
+            "producto_id": pid,
+            "nombre": producto.get("nombre"),
+            "imagen_url": _imagen_portada(producto),
+            "precio_base": float(precio_base) if precio_base is not None else None,
+            "precio_oferta": oferta["precio_oferta"],
+            "descuento_pct": _descuento_pct(oferta["precio_oferta"], precio_base),
+            "cantidad_limite": oferta["limite"],
+            "stock_restante": oferta["stock_restante"],
+            "unidades_reservadas": oferta["unidades_reservadas"],
+            "unidades_vendidas": oferta["unidades_vendidas"],
+            "segundos_restantes": segundos_restantes,
+            "fecha_fin": _fecha_fin_desde_ttl(segundos_restantes),
+        }
+        if incluir_catalogo:
+            categoria = producto.get("categoria") if isinstance(producto.get("categoria"), dict) else None
+            vendedor = producto.get("vendedor") if isinstance(producto.get("vendedor"), dict) else None
+            item["categoria"] = {
+                "id_categoria": categoria.get("id_categoria"),
+                "nombre": categoria.get("nombre"),
+            } if categoria else None
+            # En Mongo el nombre del vendedor es nombre_comercial; se expone
+            # como "nombre" (con nombre de respaldo por si un doc lo trae así).
+            item["vendedor"] = {
+                "id_vendedor": vendedor.get("id_vendedor"),
+                "nombre": vendedor.get("nombre_comercial") or vendedor.get("nombre"),
+            } if vendedor else None
+        ofertas.append(item)
+    return ofertas
+
+
+def _clave_vencimiento(oferta):
+    # Las que vencen antes primero; las sin TTL (None) al final.
+    return (oferta["segundos_restantes"] is None,
+            oferta["segundos_restantes"] or 0, oferta["producto_id"])
 
 
 @bp.route("/api/ofertas", methods=["POST"])
@@ -185,6 +274,7 @@ def crear_oferta():
             "cantidad_limite": cantidad_limite,
             "precio_oferta": float(precio_oferta),
             "precio_base": float(precio_base),
+            "descuento_pct": _descuento_pct(precio_oferta, precio_base),
             "duracion_minutos": duracion_minutos,
             "segundos_restantes": segundos,
             "fecha_fin": _fecha_fin_desde_ttl(segundos),
@@ -193,6 +283,36 @@ def crear_oferta():
         return jsonify({"error": f"No se pudo conectar a Redis: {str(e)}"}), 500
     except Exception as e:
         return jsonify({"error": f"Error al crear la oferta: {str(e)}"}), 500
+
+
+@bp.route("/api/ofertas", methods=["GET"])
+def listar_ofertas_publicas():
+    # Listado PÚBLICO (sin autenticación) para el sitio: todas las ofertas
+    # activas de productos activos. Mismo criterio que el catálogo público
+    # (activo: True en Mongo, ver catalogo.py).
+    limite_txt = request.args.get("limite")
+    limite = LIMITE_LISTADO_PUBLICO_MAXIMO
+    if limite_txt is not None:
+        try:
+            limite = int(limite_txt)
+        except ValueError:
+            limite = None
+        if limite is None or not 1 <= limite <= LIMITE_LISTADO_PUBLICO_MAXIMO:
+            return jsonify({
+                "error": f"limite debe ser un entero entre 1 y {LIMITE_LISTADO_PUBLICO_MAXIMO}"
+            }), 400
+
+    try:
+        ofertas = _ofertas_activas({"activo": True}, incluir_catalogo=True)
+        # Primero las que aún tienen cupo; las agotadas al final (el frontend
+        # las muestra como "Agotada"). Dentro de cada grupo, las que vencen antes.
+        ofertas.sort(key=lambda o: (o["stock_restante"] <= 0, *_clave_vencimiento(o)))
+        # total = ofertas activas antes de recortar por limite.
+        return jsonify({"ofertas": ofertas[:limite], "total": len(ofertas)}), 200
+    except redis.exceptions.RedisError as e:
+        return jsonify({"error": f"No se pudo conectar a Redis: {str(e)}"}), 500
+    except Exception as e:
+        return jsonify({"error": f"Error al listar las ofertas: {str(e)}"}), 500
 
 
 @bp.route("/api/ofertas/<producto_id>", methods=["GET"])
@@ -223,6 +343,7 @@ def obtener_oferta(producto_id):
             "producto_id": producto_id,
             "precio_oferta": oferta["precio_oferta"],
             "precio_base": producto.get("precio_base"),
+            "descuento_pct": _descuento_pct(oferta["precio_oferta"], producto.get("precio_base")),
             "cantidad_limite": oferta["limite"],
             "stock_restante": oferta["stock_restante"],
             "unidades_reservadas": oferta["unidades_reservadas"],
@@ -298,7 +419,7 @@ def reservar_oferta(producto_id):
         }
         try:
             redis_client.hset(clave_carrito, ofertas_redis.campo_linea_oferta(producto_id), json.dumps(linea))
-            redis_client.expire(clave_carrito, CARRITO_TTL_SEGUNDOS)
+            renovar_ttl_carrito(clave_carrito)
         except redis.exceptions.RedisError:
             # Fallo parcial: la reserva existe pero no llegó al carrito. Se
             # libera para no apartar unidades que nadie puede comprar. Si
@@ -363,3 +484,35 @@ def finalizar_oferta(producto_id):
         return jsonify({"error": f"No se pudo conectar a Redis: {str(e)}"}), 500
     except Exception as e:
         return jsonify({"error": f"Error al finalizar la oferta: {str(e)}"}), 500
+
+
+@bp.route("/api/vendedores/<int:id_vendedor>/ofertas", methods=["GET"])
+def listar_ofertas_vendedor(id_vendedor):
+    # Vive aquí (y no en vendedores.py) para reutilizar los helpers de ofertas
+    # sin imports cruzados entre blueprints.
+    rol_solicitante = request.args.get("rol_solicitante")
+    if rol_solicitante not in ROLES_VALIDOS:
+        return jsonify({"error": "rol_solicitante debe ser 'vendedor' o 'administrador'"}), 403
+
+    try:
+        id_usuario = int(request.args.get("id_usuario"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "id_usuario es obligatorio y debe ser un entero"}), 400
+
+    if rol_solicitante == "vendedor" and id_usuario != id_vendedor:
+        return jsonify({"error": "Solo puedes ver tus propias ofertas"}), 403
+
+    try:
+        # Se filtra por dueño en Mongo. id_vendedor puede estar guardado como
+        # int o como string (ver _validar_propietario), por eso se buscan ambas
+        # formas. Sin filtro de activo: el vendedor ve también las de sus
+        # productos desactivados.
+        ofertas = _ofertas_activas(
+            {"vendedor.id_vendedor": {"$in": [id_vendedor, str(id_vendedor)]}}
+        )
+        ofertas.sort(key=_clave_vencimiento)
+        return jsonify({"ofertas": ofertas, "total": len(ofertas)}), 200
+    except redis.exceptions.RedisError as e:
+        return jsonify({"error": f"No se pudo conectar a Redis: {str(e)}"}), 500
+    except Exception as e:
+        return jsonify({"error": f"Error al listar las ofertas: {str(e)}"}), 500

@@ -18,7 +18,11 @@ PG_CONFIG = {
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-CARRITO_TTL_SEGUNDOS = int(os.getenv("CARRITO_TTL_SEGUNDOS", "1800"))
+# Expiración del carrito por INACTIVIDAD, en segundos. 0 (o negativo) = el
+# carrito NO expira (default): cada lectura/escritura le quita el TTL que
+# pudiera tener (PERSIST). Un valor positivo reactiva la expiración: el TTL se
+# renueva en cada operación y el carrito vence tras ese tiempo sin uso.
+CARRITO_TTL_SEGUNDOS = int(os.getenv("CARRITO_TTL_SEGUNDOS", "0"))
 # Cuánto dura apartada en el carrito una reserva de oferta relámpago antes de
 # liberarse sola si no se completa la compra.
 RESERVA_OFERTA_TTL_SEGUNDOS = int(os.getenv("RESERVA_OFERTA_TTL_SEGUNDOS", "60"))

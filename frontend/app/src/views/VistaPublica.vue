@@ -8,6 +8,7 @@ import Carrito from "../components/publico/Carrito.vue";
 import FormularioLogin from "../components/publico/FormularioLogin.vue";
 import FormularioRegistro from "../components/publico/FormularioRegistro.vue";
 import PerfilComprador from "../components/publico/PerfilComprador.vue";
+import OfertasFlash from "../components/publico/OfertasFlash.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -38,8 +39,9 @@ function onBuscar(texto) {
       <FormularioRegistro v-else-if="vistaActual === 'registro'" @exito="cambiarVista('login')" />
       <Carrito v-else-if="vistaActual === 'carrito'" @completado="cambiarVista('catalogo')" />
       <PerfilComprador v-else-if="vistaActual === 'perfil'" />
+      <OfertasFlash v-else-if="vistaActual === 'ofertas'" @ir-a-catalogo="cambiarVista('catalogo')" />
       <ResultadosBusqueda v-else-if="busqueda" :busqueda="busqueda" @buscar="onBuscar" />
-      <CatalogoProductos v-else />
+      <CatalogoProductos v-else @ver-ofertas="cambiarVista('ofertas')" />
     </main>
 
     <footer class="border-t border-neutral-200 bg-white text-neutral-400 text-xs py-6 text-center tracking-wide">

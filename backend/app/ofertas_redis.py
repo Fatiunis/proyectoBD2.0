@@ -110,6 +110,19 @@ def producto_de_campo(campo):
 # ---------------------------------------------------------------- utilidades
 
 
+def pids_con_oferta_activa():
+    """Productos con una key oferta:{pid}:id viva. Usa SCAN (no KEYS) para no
+    bloquear Redis; puede devolver alguno que venza justo después, así que el
+    llamador debe confirmar con consultar()."""
+    sufijo = ":id"
+    pids = set()
+    for clave in redis_client.scan_iter(match=f"oferta:*{sufijo}", count=200):
+        pid = clave[len("oferta:"):-len(sufijo)]
+        if pid:
+            pids.add(pid)
+    return sorted(pids)
+
+
 def segundos_desde_ms(ms):
     return max(0, math.ceil(ms / 1000))
 

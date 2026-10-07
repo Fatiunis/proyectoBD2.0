@@ -14,9 +14,13 @@ bp = Blueprint("carrito", __name__)
 # ============================================================================
 # El carrito vive en Redis como un hash "carrito:{id_usuario}": cada campo del
 # hash es el id_producto (el _id de Mongo) y el valor es un string JSON con el
-# resto del item (cantidad, precio, etc.). El TTL se renueva en cada lectura o
-# escritura -- el carrito expira a los CARRITO_TTL_SEGUNDOS de INACTIVIDAD, no
-# desde su creación.
+# resto del item (cantidad, precio, etc.). Por defecto el carrito NO expira
+# (CARRITO_TTL_SEGUNDOS=0): cada lectura o escritura pasa por
+# renovar_ttl_carrito(), que le hace PERSIST (así un carrito que quedó con TTL
+# de una configuración anterior deja de vencer). Si CARRITO_TTL_SEGUNDOS > 0,
+# el helper hace EXPIRE y el carrito vence a los CARRITO_TTL_SEGUNDOS de
+# INACTIVIDAD (no desde su creación). Esto no afecta a las líneas de oferta:
+# esas se siguen liberando cuando vence su reserva (ver abajo).
 #
 # Redis es una dependencia nueva y menos estable que Postgres/Mongo en este
 # entorno de desarrollo (puede no estar levantada), así que -a diferencia del
@@ -40,6 +44,19 @@ def _clave_carrito(id_usuario):
     return f"carrito:{id_usuario}"
 
 
+def renovar_ttl_carrito(clave):
+    """Aplica la política de expiración del carrito a `clave`.
+
+    CARRITO_TTL_SEGUNDOS > 0 -> EXPIRE (expira por inactividad).
+    CARRITO_TTL_SEGUNDOS <= 0 -> PERSIST (el carrito no expira).
+    Sobre una key inexistente ambos comandos no hacen nada.
+    """
+    if CARRITO_TTL_SEGUNDOS > 0:
+        redis_client.expire(clave, CARRITO_TTL_SEGUNDOS)
+    else:
+        redis_client.persist(clave)
+
+
 def _es_entero_positivo(valor):
     return isinstance(valor, int) and not isinstance(valor, bool) and valor > 0
 
@@ -49,7 +66,7 @@ def get_carrito(id_usuario):
     clave = _clave_carrito(id_usuario)
     try:
         crudo = redis_client.hgetall(clave)
-        redis_client.expire(clave, CARRITO_TTL_SEGUNDOS)
+        renovar_ttl_carrito(clave)
 
         items = []
         ofertas_expiradas = []
@@ -145,7 +162,7 @@ def agregar_item(id_usuario):
             }
 
         redis_client.hset(clave, id_producto, json.dumps(item))
-        redis_client.expire(clave, CARRITO_TTL_SEGUNDOS)
+        renovar_ttl_carrito(clave)
 
         item_respuesta = dict(item)
         item_respuesta["id_producto"] = id_producto
@@ -185,7 +202,7 @@ def actualizar_item(id_usuario, id_producto):
         item["cantidad"] = max(1, min(cantidad, stock_disponible))
 
         redis_client.hset(clave, id_producto, json.dumps(item))
-        redis_client.expire(clave, CARRITO_TTL_SEGUNDOS)
+        renovar_ttl_carrito(clave)
 
         item_respuesta = dict(item)
         item_respuesta["id_producto"] = id_producto
@@ -210,9 +227,9 @@ def eliminar_item(id_usuario, id_producto):
             ofertas_redis.liberar(producto_oferta, id_usuario, clave)
         else:
             redis_client.hdel(clave, id_producto)
-        # Si el hash quedó vacío, Redis ya lo borró solo; EXPIRE sobre una key
-        # inexistente simplemente no hace nada (no rompe nada).
-        redis_client.expire(clave, CARRITO_TTL_SEGUNDOS)
+        # Si el hash quedó vacío, Redis ya lo borró solo; EXPIRE/PERSIST sobre
+        # una key inexistente simplemente no hace nada (no rompe nada).
+        renovar_ttl_carrito(clave)
         return jsonify({"mensaje": "Producto eliminado del carrito"}), 200
     except redis.exceptions.RedisError as e:
         return jsonify({"error": f"No se pudo conectar a Redis: {str(e)}"}), 500
