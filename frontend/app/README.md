@@ -29,10 +29,17 @@ pedidos, perfil y direcciones), `/producto/:id` página de producto
 
 El buscador (`ResultadosBusqueda.vue`) usa `GET /api/busqueda` (Elasticsearch)
 y, si responde 503, repite la búsqueda contra `GET /api/productos?q=`
-(MongoDB) mostrando un aviso. El checkout manda una clave de idempotencia por
+(MongoDB) mostrando un aviso; cualquier otro error (por ejemplo, `400
+BUSQUEDA_NO_VALIDA`) se muestra como error, sin respaldo. El checkout manda una clave de idempotencia por
 intento de compra; con `PERMITIR_FALLAS_SIMULADAS=1` en el `.env` del backend,
 muestra además un selector para simular fallas (ver
 `docs/estrategia-consistencia-checkout.md`).
+
+La pestaña Historial del admin (`components/admin/HistorialProducto.vue`)
+carga el selector de productos recorriendo todas las páginas de `GET
+/api/productos` (`por_pagina=100`) y pagina el feed de `GET /api/historial`
+de a 20 eventos con `Paginacion.vue`: muestra el total ("N eventos") y vuelve
+a la página 1 al pulsar "Filtrar" o "Limpiar filtros".
 
 ## Build de producción
 
@@ -40,7 +47,7 @@ muestra además un selector para simular fallas (ver
 npm run build
 ```
 
-Genera el build en `app/dist/`.
+Genera el build en `frontend/app/dist/` (es decir, `dist/` dentro de esta carpeta).
 
 ## Stack
 
@@ -52,7 +59,10 @@ Genera el build en `app/dist/`.
   (`src/composables/`: `useSesion`, `useToast`, `useCategorias`, `useCarrito`;
   este último guarda el carrito en el backend, sobre Redis).
 - Componentes compartidos entre el sitio público y el admin en
-  `src/components/comunes/` (por ahora, `Paginacion.vue`). `GET /api/productos`
-  devuelve `{items, total, pagina, por_pagina, total_paginas}`, no una lista.
+  `src/components/comunes/` (por ahora, `Paginacion.vue`, que usan el
+  catálogo público, el del admin, los resultados de búsqueda y el historial).
+  `GET /api/productos` devuelve `{items, total, pagina, por_pagina,
+  total_paginas}`, no una lista; `GET /api/historial` devuelve `{eventos,
+  total, pagina, por_pagina, total_paginas}`.
 - `apiFetch` (`src/services/api.js`) no lanza si el servidor no responde:
   devuelve `{ok: false, status: 0, data: {codigo: "SIN_CONEXION"}}`.

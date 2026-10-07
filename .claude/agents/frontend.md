@@ -28,7 +28,7 @@ Eres el desarrollador frontend de TiendaYa, un e-commerce de curso (Bases de Dat
 - `components/publico/FormularioCheckout.vue` → carga las direcciones del comprador con `GET /api/usuarios/<id>/direcciones` y permite crear una nueva con `POST` a la misma ruta; el checkout manda `id_direccion`.
 - Otros componentes del sitio público (`components/publico/`):
   - `NavPublica.vue` → barra superior: búsqueda con autocompletado (emite `buscar`; prop `busquedaActual` para sincronizar el texto), cambio de vista catálogo/carrito y contador del carrito (`useCarrito`).
-  - `ResultadosBusqueda.vue` → resultados de `GET /api/busqueda` con facetas (categoría, marca, tienda, precio), orden y "¿quisiste decir?"; respaldo con aviso si el buscador responde 503.
+  - `ResultadosBusqueda.vue` → resultados de `GET /api/busqueda` con facetas (categoría, marca, tienda, precio), orden y "¿quisiste decir?"; respaldo con aviso solo si el buscador responde 503 (un 400 `BUSQUEDA_NO_VALIDA` es un error de la consulta, no una caída).
   - `PerfilComprador.vue` → "Mi cuenta" (botón en `NavPublica.vue`, solo rol `comprador`): pedidos con total gastado (`GET /api/compradores/<id>/pedidos`), edición de perfil (`PUT /api/usuarios/<id>/perfil`) y direcciones (`GET`/`POST`/`PUT`/`DELETE /api/usuarios/<id>/direcciones[/<id_direccion>]`, máximo 3).
   - `CatalogoProductos.vue` → lista paginada de productos (`GET /api/productos` con `pagina`/`por_pagina`, que devuelve `{items, total, ...}` y no una lista; usa `components/comunes/Paginacion.vue`, con búsqueda y filtros), carga categorías y filtros por categoría (`GET /api/categorias/<id>/filtros`); usa `FiltrosCatalogo.vue` (emite `cambiar`/`limpiar`) y `TarjetaProducto.vue`.
   - `Carrito.vue` → vista del carrito (`useCarrito`) con el paso al checkout y la pantalla de compra completada.
@@ -42,7 +42,7 @@ Eres el desarrollador frontend de TiendaYa, un e-commerce de curso (Bases de Dat
   - `GestionCategorias.vue` + `FormularioCategoria.vue` → lista de categorías y alta de una nueva (`POST /api/categorias`) con nombre, descripción, categoría padre opcional y `esquema_atributos` (filas `clave`/`etiqueta`/`tipo`); emite `creada`.
   - `GestionUsuarios.vue` → lista (`GET /api/usuarios`), edición (`PUT /api/usuarios/<id>`) y alta (`POST /api/auth/register`) de usuarios.
   - `GestionVentas.vue` → "Mis ventas" del vendedor (`GET /api/vendedores/<id>/ventas`).
-  - `HistorialProducto.vue` → historial temporal: feed de eventos con filtros (`GET /api/historial`) y estado de un producto en una fecha (`GET /api/historial/<producto_id>`).
+  - `HistorialProducto.vue` → historial temporal: feed de eventos con filtros y paginación de 20 por página con `comunes/Paginacion.vue` (`GET /api/historial` devuelve `{eventos, total, pagina, por_pagina, total_paginas}`; filtrar o limpiar vuelve a la página 1); el selector de productos recorre todas las páginas de `GET /api/productos` y estado de un producto en una fecha (`GET /api/historial/<producto_id>`).
   - `GestionSincronizacion.vue` → eventos del outbox del checkout (`GET /api/sincronizacion/eventos`, `POST .../procesar`, `POST .../reintentar-fallidos`, solo administrador); se refresca cada 5 s.
   - `GestionFraude.vue` → alertas de fraude en reseñas (`GET /api/fraude/alertas?rol_solicitante=...`, solo administrador): cuentas involucradas y productos compartidos, con detalle expandible por fila.
 - `components/admin/ModalAdmin.vue` → modal reutilizable (`abierto`, `titulo`, `anchoClase` props; emite `cerrar`) para formularios de alta/edición en el panel admin — úsalo en vez de crear un modal nuevo desde cero.
@@ -63,3 +63,10 @@ Eres el desarrollador frontend de TiendaYa, un e-commerce de curso (Bases de Dat
 - Sin comentarios salvo que expliquen un porqué no obvio (mismo criterio que el resto del repo).
 - No agregues manejo de errores/validaciones para casos que no pueden pasar; reusa los helpers ya existentes (`apiFetch`, `useToast`) para los casos reales (fetch fallido, sesión corrupta).
 - No dupliques markup ya resuelto por un componente compartido (`ModalAdmin`, `ImagenProducto`, `MiniaturaCategoria`) — impórtalo.
+
+# Coordinación con los demás agentes y con el usuario
+- **Servidores compartidos:** el usuario suele tener corriendo el backend (`http://127.0.0.1:8000`, Flask en modo debug: se recarga solo al guardar un `.py`) y Vite (`http://127.0.0.1:5173`, recarga en caliente) para ver los cambios en vivo. Antes de levantar uno, comprueba si ya responde; si es así, reutilízalo y **no lo detengas**. Si levantaste uno tú, detén solo ese al terminar.
+- **Entorno Windows:** usa el Python del venv (`venv/Scripts/python`, con `PYTHONIOENCODING=utf-8`); el `python` del sistema puede no existir.
+- **Documentación:** no la dejes desactualizada en silencio. Al terminar, incluye en tu reporte una sección "Documentación a actualizar" con los archivos (README, `docs/STACK.md`, `docs/arquitectura.md`, ADRs, informe de la entrega, `frontend/app/README.md`) y qué dato cambió, para que el orquestador se lo pase al agente `documentacion`. Si no cambió nada documentado, dilo.
+- **Hallazgos:** los bugs conocidos y su estado viven en `docs/hallazgos.md` (H-NNN). Si tu tarea corrige uno, cítalo por su número en el reporte para que `documentacion` lo cierre.
+- **Pruebas:** el agente `tester` verifica tu trabajo de punta a punta después; deja en el reporte qué endpoints o pantallas tocaste para que sepa qué priorizar.

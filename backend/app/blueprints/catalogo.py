@@ -198,9 +198,13 @@ def get_productos():
 
     if texto_busqueda:
         proyeccion["relevancia"] = {"$meta": "textScore"}
-        cursor = col_productos.find(query, proyeccion).sort([("relevancia", {"$meta": "textScore"})])
+        cursor = col_productos.find(query, proyeccion).sort(
+            [("relevancia", {"$meta": "textScore"}), ("_id", ASCENDING)]
+        )
     else:
-        cursor = col_productos.find(query, proyeccion).sort("precio_base", ASCENDING)
+        # Desempate por _id: con precios (o puntajes) empatados el orden entre
+        # páginas no es estable y skip/limit repetiría y saltaría productos.
+        cursor = col_productos.find(query, proyeccion).sort([("precio_base", ASCENDING), ("_id", ASCENDING)])
 
     try:
         pagina = max(1, int(request.args.get("pagina", 1)))
@@ -214,7 +218,10 @@ def get_productos():
 
     total = col_productos.count_documents(query)
 
-    docs = list(cursor.skip((pagina - 1) * por_pagina).limit(por_pagina))
+    # Página fuera de rango: no se consulta (el total ya se conoce). Así una
+    # página enorme no llega a Mongo, cuyo skip es un int64 (OverflowError).
+    salto = (pagina - 1) * por_pagina
+    docs = list(cursor.skip(salto).limit(por_pagina)) if salto < total else []
     for d in docs:
         d["_id"] = str(d["_id"])
 

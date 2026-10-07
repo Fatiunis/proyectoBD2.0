@@ -40,10 +40,10 @@ backend/
       compradores.py            # /api/compradores/<id_comprador>/pedidos ("Mi cuenta": pedidos + total gastado)
       direcciones.py            # /api/usuarios/<id_usuario>/direcciones (GET, POST; máx. 3) y .../<id_direccion> (PUT, DELETE)
       catalogo.py                # /api/categorias, /api/categorias/<id>/filtros, /api/productos (paginado), /api/productos/<id>
-      historial.py                # /api/historial (feed con filtros), /api/historial/<producto_id> (reconstrucción por fecha)
+      historial.py                # /api/historial (feed paginado con filtros), /api/historial/<producto_id> (reconstrucción por fecha)
       vendedores.py                # /api/vendedores/<id>/ventas
       carrito.py                   # /api/carrito/<id_usuario> (Redis, Entrega 2)
-      ofertas.py                   # /api/ofertas, /api/ofertas/<producto_id>/reservar (Redis + Lua, Entrega 2)
+      ofertas.py                   # /api/ofertas (POST), /api/ofertas/<producto_id> (GET, DELETE), /api/ofertas/<producto_id>/reservar (Redis + Lua, Entrega 2)
       resenas.py                   # /api/resenas (Mongo + sincronización a Neo4j, Entrega 2)
       fraude.py                    # /api/fraude/alertas (Cypher de varios saltos, Entrega 2)
       busqueda.py                  # /api/busqueda, /api/busqueda/autocompletar (Elasticsearch, Entrega 3)
@@ -104,11 +104,11 @@ frontend/app/
     style.css               # @import "tailwindcss"; + @theme (accent, Inter)
     router/index.js          # rutas "/", "/producto/:id" y "/admin/:tab?"
     views/
-      VistaPublica.vue        # sitio público real (catálogo, carrito, checkout, login/registro)
+      VistaPublica.vue        # sitio público real (catálogo, buscador con facetas, carrito, checkout, login/registro, "Mi cuenta")
       VistaDetalleProducto.vue # página de producto (especificaciones, reseñas, oferta límite)
-      VistaAdmin.vue           # panel admin real (catálogo, categorías, usuarios, ventas, historial, fraude)
-    components/publico/, components/admin/, composables/, services/, utils/
-  vite.config.js           # plugins: vue(), tailwindcss(); puerto 5173
+      VistaAdmin.vue           # panel admin real (catálogo, categorías, usuarios, ventas, historial, fraude, sincronización)
+    components/publico/, components/admin/, components/comunes/, composables/, services/, utils/
+  vite.config.js           # plugins: vue(), tailwindcss(); puerto 5173; server.watch.usePolling (OneDrive)
   README.md                # cómo levantar dev/build
 ```
 
@@ -363,7 +363,9 @@ frontend/app/
   Historial del admin) sigue tratando la respuesta de `GET /api/productos`
   como lista (`[...data]`), así que falla con "data is not iterable" y no
   carga el buscador de productos. Además, aunque se adapte a `data.items`,
-  solo recibiría la primera página (24 productos).
+  solo recibiría la primera página (24 productos). Registrado como
+  [H-001](hallazgos.md); corregido el 2026-10-06 (ver la entrada de esa
+  fecha más abajo).
 - 2026-10-05: **Entrega 3 — buscador con Elasticsearch.** Se agrega
   Elasticsearch 8.15 (un nodo, `xpack.security` desactivado, heap de 512 MB)
   a `docker-compose.yml`. Índice con mapping deliberado
@@ -372,7 +374,8 @@ frontend/app/
   `stemmer_override` para plurales en inglés ("laptops"), sinónimos solo al
   buscar (`synonym_graph`), subcampo `edge_ngram` para autocompletar,
   subcampo sin stemming para el corrector, `keyword` para facetas,
-  `flattened` para los 126 atributos variables y `scaled_float` para el
+  `flattened` para las cerca de 125 claves de atributos variables (124 al
+  2026-10-06) y `scaled_float` para el
   precio. Se consulta por un alias; `indexar_productos_elasticsearch.py`
   crea un índice versionado, verifica la cantidad contra Mongo y mueve el
   alias (reindexar sin cortar el servicio). `GET /api/busqueda` combina
@@ -424,3 +427,36 @@ frontend/app/
   panel de Sincronización. Documentos:
   `docs/estrategia-consistencia-checkout.md`, ADR-004, ADR-005 (NewSQL para
   pagos: no migrar) e `informe-entrega-3.md`.
+- 2026-10-06: **Correcciones tras la verificación de la Entrega 3** (registro
+  completo en [`hallazgos.md`](hallazgos.md); en el árbol de trabajo, sin
+  commit todavía). (1) **Historial**: `HistorialProducto.vue` vuelve a cargar
+  el selector de productos recorriendo todas las páginas de `GET
+  /api/productos` (`por_pagina=100`, en paralelo según `total_paginas`) (H-001).
+  `GET /api/historial` deja de devolver solo los 50 eventos más recientes
+  (máximo 200, sin total): pasa a `{eventos, total, pagina, por_pagina,
+  total_paginas}`, 20 por página por defecto y 100 como máximo, `limit` como
+  alias de `por_pagina`, orden `fecha_evento` desc + `_id` desc, y conteo y
+  página en una sola agregación con `$facet`; el componente usa
+  `Paginacion.vue` y muestra "N eventos" (H-011, pedido por el usuario: había
+  1016 eventos y se veían 50). (2) **Orden estable del catálogo**: `GET
+  /api/productos` ordenaba solo por `precio_base` y, con precios empatados,
+  `skip`/`limit` repetía y saltaba productos (43 páginas de 24 → 1015 ítems
+  pero 1001 distintos); ahora desempata por `_id` (H-010). (3) **Buscador**:
+  una página fuera de la ventana de 10 000 resultados de Elasticsearch
+  (`MAX_VENTANA_RESULTADOS`) responde `200` con `items` vacíos y el total y
+  las facetas reales, y `total_paginas` se limita a esa ventana; un `400` de
+  Elasticsearch se responde `400 BUSQUEDA_NO_VALIDA` en vez de `503`, que
+  queda solo para caídas reales (conexión, timeout, `404` del índice,
+  `401`/`403`, `429`, `5xx`), para no mandar al frontend al respaldo de Mongo
+  con el motor arriba (H-002); `precio_min`/`precio_max` no finitos → `400`
+  (H-003). (4) **Checkout**: `id_comprador` se normaliza a entero
+  (`_id_entero`); un string numérico ya no rompe la comparación con la clave
+  de idempotencia y un valor inválido responde `400` (H-004). (5)
+  **Repositorio**: `.gitignore` ignora `.env.*` salvo `.env.example` (H-008);
+  se borró `docs/hola.html`, vacío (H-007). Re-verificación:
+  `prueba_buscador.py --caida-real` 21/21, `prueba_fallas_checkout.py
+  --caida-real` 45/45 (E4 16 s, E5 15 s), outbox 36 procesados / 0
+  pendientes / 0 fallidos, 1015 productos en MongoDB y en Elasticsearch.
+  Después se cerraron H-012 (página enorme → `200` vacío, no `500`), H-014
+  (el Historial pagina con los filtros aplicados) y H-015 (stock de PROD-0004
+  y PROD-0014 ajustado desde PostgreSQL); queda abierto H-013.

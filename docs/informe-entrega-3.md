@@ -42,7 +42,7 @@
 
 ### Diagnóstico
 
-La búsqueda anterior usaba el índice de texto de MongoDB (`$text`). Contra el catálogo real de 1019 productos, `laptp`, `audifnos`, `celulr`, `lapt` y `auriculares` devolvían **0 resultados**, y `celular` devolvía 14 tablets ("Wi-Fi + Celular") y ningún celular. `$text` no tiene coincidencia aproximada, ni por prefijo, ni sinónimos, y su relevancia no se puede ajustar. El análisis de alternativas (no cambiar, texto completo de PostgreSQL, Atlas Search, Elasticsearch) está en **ADR-004**.
+La búsqueda anterior usaba el índice de texto de MongoDB (`$text`). Contra el catálogo real de 1015 productos, `laptp`, `audifnos`, `celulr`, `lapt` y `auriculares` devolvían **0 resultados**, y `celular` devolvía 14 tablets ("Wi-Fi + Celular") y ningún celular. `$text` no tiene coincidencia aproximada, ni por prefijo, ni sinónimos, y su relevancia no se puede ajustar. El análisis de alternativas (no cambiar, texto completo de PostgreSQL, Atlas Search, Elasticsearch) está en **ADR-004**.
 
 ### Implementación
 
@@ -51,7 +51,7 @@ La búsqueda anterior usaba el índice de texto de MongoDB (`$text`). Contra el 
   - Un analizador en español sin acentos ni mayúsculas, con stemming suave y una lista de plurales en inglés ("laptops" → "laptop").
   - Sinónimos aplicados solo al buscar ("portátil" → laptop, "auriculares" → audífonos, "smartphone" → celular).
   - Un subcampo con *edge n-grams* para autocompletar y otro sin stemming para el corrector.
-  - `keyword` para las facetas, `flattened` para los 126 atributos variables por categoría (evita la explosión de campos) y `scaled_float` para el precio.
+  - `keyword` para las facetas, `flattened` para las cerca de 125 claves de atributos variables por categoría (124 al 2026-10-06) (evita la explosión de campos) y `scaled_float` para el precio.
 - **Relevancia**: combina coincidencia aproximada (`fuzziness: AUTO`) por campo con pesos, un puntaje fijo cuando lo buscado nombra una categoría, frase exacta (con 2 o más palabras), prefijos y SKU exacto.
 - **Autocompletado**: `GET /api/busqueda/autocompletar` sobre el subcampo de *edge n-grams*, con un error de tipeo permitido. En la barra de búsqueda se ve como una lista desplegable que se navega con el teclado.
 - **"¿Quisiste decir…?"**: un `phrase suggester` que solo corrige palabras que no existen en el índice.

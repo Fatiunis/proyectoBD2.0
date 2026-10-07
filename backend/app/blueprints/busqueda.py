@@ -1,4 +1,6 @@
 from elastic_transport import ConnectionError as ESConnectionError, ConnectionTimeout as ESConnectionTimeout
+import math
+
 from elasticsearch import ApiError, NotFoundError
 from flask import Blueprint, request, jsonify
 
@@ -19,6 +21,24 @@ bp = Blueprint("busqueda", __name__)
 MAX_LARGO_CONSULTA = 200
 
 _ERRORES_MOTOR = (ESConnectionError, ESConnectionTimeout, ApiError)
+
+
+def _es_error_de_solicitud(e):
+    """True si Elasticsearch respondió y rechazó la consulta (400): el motor
+    está arriba y caer al respaldo de Mongo no tiene sentido. El resto
+    (conexión, timeout, 404 del índice/alias, 401/403, 429, 5xx) se trata como
+    buscador no disponible."""
+    return isinstance(e, ApiError) and getattr(e, "status_code", None) == 400
+
+
+def _error_motor(e):
+    if _es_error_de_solicitud(e):
+        print(f"[busqueda] ADVERTENCIA: Elasticsearch rechazó la consulta: {e}")
+        return jsonify({
+            "error": "La búsqueda no es válida.",
+            "codigo": "BUSQUEDA_NO_VALIDA",
+        }), 400
+    return _no_disponible(e)
 
 
 def _no_disponible(e):
@@ -53,6 +73,8 @@ def _decimal(nombre):
         n = float(valor)
     except ValueError:
         raise ValueError(f"'{nombre}' debe ser un número")
+    if not math.isfinite(n):
+        raise ValueError(f"'{nombre}' debe ser un número finito")
     if n < 0:
         raise ValueError(f"'{nombre}' no puede ser negativo")
     return n
@@ -102,7 +124,7 @@ def buscar_productos():
     try:
         return jsonify(busqueda_es.buscar(params))
     except _ERRORES_MOTOR as e:
-        return _no_disponible(e)
+        return _error_motor(e)
 
 
 @bp.route("/api/busqueda/autocompletar", methods=["GET"])
@@ -116,4 +138,4 @@ def autocompletar_productos():
     try:
         return jsonify(busqueda_es.autocompletar(q))
     except _ERRORES_MOTOR as e:
-        return _no_disponible(e)
+        return _error_motor(e)

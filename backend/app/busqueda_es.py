@@ -28,6 +28,12 @@ POR_PAGINA_DEFECTO = 24
 POR_PAGINA_MAXIMO = 100
 MAX_AUTOCOMPLETADO = 8
 
+# index.max_result_window de Elasticsearch (10000 por defecto): una búsqueda
+# con from + size mayor se rechaza con 400. Las páginas que caen más allá de
+# esa ventana se responden como cualquier página posterior a la última
+# (items vacíos), sin pedirle hits al motor.
+MAX_VENTANA_RESULTADOS = 10000
+
 # Rangos de precio (en quetzales) de la faceta de precio. Cada rango se puede
 # elegir como filtro con precio_min / precio_max.
 RANGOS_PRECIO = [
@@ -225,6 +231,12 @@ def buscar(params):
     filtros = _filtros_faceta(params)
     pagina = params["pagina"]
     por_pagina = params["por_pagina"]
+    desde = (pagina - 1) * por_pagina
+    # Fuera de la ventana de resultados: misma consulta con size 0, así se
+    # devuelven igual el total, las facetas y la sugerencia reales. La última
+    # página alcanzable se recorta para no pasarse de la ventana.
+    fuera_de_ventana = desde >= MAX_VENTANA_RESULTADOS
+    tamano = 0 if fuera_de_ventana else min(por_pagina, MAX_VENTANA_RESULTADOS - desde)
 
     cuerpo = {
         # La consulta de texto y "activo" acotan TODO (resultados y facetas);
@@ -233,8 +245,8 @@ def buscar(params):
         "query": {"bool": {"must": [_consulta_texto(q)], "filter": [{"term": {"activo": True}}]}},
         "post_filter": {"bool": {"filter": list(filtros.values())}},
         "sort": ORDENES[params["orden"]],
-        "from": (pagina - 1) * por_pagina,
-        "size": por_pagina,
+        "from": 0 if fuera_de_ventana else desde,
+        "size": tamano,
         "track_total_hits": True,
         "aggs": {
             "categorias": {
@@ -332,7 +344,9 @@ def buscar(params):
         "total": total,
         "pagina": pagina,
         "por_pagina": por_pagina,
-        "total_paginas": (total + por_pagina - 1) // por_pagina if total else 0,
+        # Solo las páginas alcanzables dentro de la ventana de resultados.
+        "total_paginas": (min(total, MAX_VENTANA_RESULTADOS) + por_pagina - 1) // por_pagina
+        if total else 0,
         "facetas": facetas,
         "sugerencia": sugerencia,
         "motor": "elasticsearch",

@@ -3,11 +3,18 @@ import { ref, computed, onMounted } from "vue";
 import { apiFetch } from "../../services/api";
 import { useSesion } from "../../composables/useSesion";
 import { useToast } from "../../composables/useToast";
+import Paginacion from "../comunes/Paginacion.vue";
 
 const { sesion } = useSesion();
 const { toast } = useToast();
 
 const esVendedor = computed(() => sesion.value?.rol === "vendedor");
+
+const POR_PAGINA = 20;
+const pagina = ref(1);
+const total = ref(null);
+const contenedorTabla = ref(null);
+const tablaDesplazable = ref(null);
 
 const textoBusqueda = ref("");
 const fechaDesde = ref("");
@@ -17,10 +24,27 @@ const eventos = ref([]);
 const cargando = ref(true);
 const filaExpandida = ref(null);
 
+// El datalist necesita el catálogo completo, pero /productos pagina con máximo 100
+// por página: se pide la primera y el resto en paralelo según total_paginas.
 async function cargarProductos() {
-  const path = esVendedor.value ? `/productos?vendedor_id=${sesion.value.id_usuario}` : "/productos";
-  const { data } = await apiFetch(path);
-  const ordenados = [...(data || [])].sort((a, b) => a.nombre.localeCompare(b.nombre));
+  const params = new URLSearchParams({ por_pagina: 100 });
+  if (esVendedor.value) params.set("vendedor_id", sesion.value.id_usuario);
+
+  const primera = await apiFetch(`/productos?${params}&pagina=1`);
+  if (!primera.ok) {
+    toast("No se pudo cargar la lista de productos para el filtro.", "error");
+    return;
+  }
+
+  const restantes = await Promise.all(
+    Array.from({ length: Math.max(primera.data.total_paginas - 1, 0) }, (_, i) =>
+      apiFetch(`/productos?${params}&pagina=${i + 2}`)
+    )
+  );
+  if (restantes.some((r) => !r.ok)) toast("La lista de productos del filtro quedó incompleta.", "error");
+
+  const productos = [primera, ...restantes].flatMap((r) => (r.ok ? r.data.items : []));
+  const ordenados = productos.sort((a, b) => a.nombre.localeCompare(b.nombre));
   const mapa = {};
   ordenados.forEach((p) => {
     mapa[`${p.nombre} — ${p.sku}`] = p._id;
@@ -49,17 +73,18 @@ function formatearFecha(iso) {
   return new Date(iso).toLocaleString("es-GT", { dateStyle: "long", timeStyle: "short", timeZone: "America/Guatemala" });
 }
 
-async function cargarHistorial() {
-  if (textoBusqueda.value && !idResuelto.value) {
-    toast("Selecciona un producto válido de la lista antes de filtrar.", "error");
-    return;
-  }
+// La paginación usa solo los filtros confirmados con "Filtrar"/"Limpiar filtros",
+// no lo que el usuario esté escribiendo en los inputs en ese momento.
+const filtrosAplicados = ref({ productoId: null, desde: null, hasta: null });
 
+async function cargarHistorial(numPagina, filtros) {
   const params = new URLSearchParams();
-  if (idResuelto.value) params.set("producto_id", idResuelto.value);
-  if (fechaDesde.value) params.set("fecha_desde", new Date(fechaDesde.value).toISOString());
-  if (fechaHasta.value) params.set("fecha_hasta", new Date(fechaHasta.value).toISOString());
+  if (filtros.productoId) params.set("producto_id", filtros.productoId);
+  if (filtros.desde) params.set("fecha_desde", filtros.desde);
+  if (filtros.hasta) params.set("fecha_hasta", filtros.hasta);
   if (esVendedor.value) params.set("vendedor_id", sesion.value.id_usuario);
+  params.set("pagina", numPagina);
+  params.set("por_pagina", POR_PAGINA);
 
   cargando.value = true;
   const { ok, data } = await apiFetch(`/historial?${params.toString()}`);
@@ -67,18 +92,40 @@ async function cargarHistorial() {
 
   if (!ok) {
     toast(data.error || data.detail || "No se pudo cargar el historial.", "error");
-    return;
+    return false;
   }
 
+  filaExpandida.value = null;
   eventos.value = data.eventos || [];
+  total.value = typeof data.total === "number" ? data.total : null;
+  pagina.value = numPagina;
+  filtrosAplicados.value = filtros;
+  return true;
+}
+
+function filtrar() {
+  if (textoBusqueda.value && !idResuelto.value) {
+    toast("Selecciona un producto válido de la lista antes de filtrar.", "error");
+    return;
+  }
+  cargarHistorial(1, {
+    productoId: idResuelto.value,
+    desde: fechaDesde.value ? new Date(fechaDesde.value).toISOString() : null,
+    hasta: fechaHasta.value ? new Date(fechaHasta.value).toISOString() : null,
+  });
 }
 
 function limpiarFiltros() {
   textoBusqueda.value = "";
   fechaDesde.value = "";
   fechaHasta.value = "";
-  filaExpandida.value = null;
-  cargarHistorial();
+  filtrar();
+}
+
+async function onCambiarPagina(nueva) {
+  if (!(await cargarHistorial(nueva, filtrosAplicados.value))) return;
+  if (tablaDesplazable.value) tablaDesplazable.value.scrollTop = 0;
+  contenedorTabla.value?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function alternarDetalle(index) {
@@ -87,7 +134,7 @@ function alternarDetalle(index) {
 
 onMounted(async () => {
   await cargarProductos();
-  await cargarHistorial();
+  await cargarHistorial(1, filtrosAplicados.value);
 });
 </script>
 
@@ -120,13 +167,14 @@ onMounted(async () => {
         <input type="datetime-local" v-model="fechaHasta" class="w-full border-0 border-b border-neutral-300 py-2 text-sm focus:ring-0 focus:border-accent outline-none transition bg-transparent">
       </div>
       <div class="flex gap-2 shrink-0">
-        <button @click="cargarHistorial" class="px-4 py-2 bg-neutral-950 hover:bg-neutral-800 text-white font-semibold rounded-full text-sm transition">Filtrar</button>
+        <button @click="filtrar" class="px-4 py-2 bg-neutral-950 hover:bg-neutral-800 text-white font-semibold rounded-full text-sm transition">Filtrar</button>
         <button @click="limpiarFiltros" class="px-4 py-2 text-neutral-500 hover:text-neutral-800 font-semibold text-sm transition">Limpiar filtros</button>
       </div>
     </div>
 
-    <div class="bg-white p-5 rounded-2xl border border-neutral-200">
-      <div class="overflow-x-auto lg:max-h-[calc(100vh-14rem)] lg:overflow-y-auto scrollbar-fina">
+    <div ref="contenedorTabla" class="bg-white p-5 rounded-2xl border border-neutral-200 scroll-mt-6">
+      <p v-if="total !== null" class="text-xs text-neutral-400 mb-3">{{ total }} {{ total === 1 ? "evento" : "eventos" }}</p>
+      <div ref="tablaDesplazable" class="overflow-x-auto lg:max-h-[calc(100vh-14rem)] lg:overflow-y-auto scrollbar-fina">
         <table class="w-full text-sm">
           <thead class="sticky top-0 bg-white z-10">
             <tr class="text-left text-[11px] uppercase tracking-wide text-neutral-400 border-b border-neutral-100">
@@ -169,6 +217,7 @@ onMounted(async () => {
           </tbody>
         </table>
       </div>
+      <Paginacion v-if="total !== null" :total="total" :pagina="pagina" :por-pagina="POR_PAGINA" @cambiar-pagina="onCambiarPagina" />
     </div>
   </div>
 </template>

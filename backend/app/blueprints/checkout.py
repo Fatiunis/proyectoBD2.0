@@ -142,6 +142,20 @@ def _respuesta_repetida(registro):
     }), 200
 
 
+def _id_entero(valor):
+    """Normaliza un id que puede llegar como número o como string ("12").
+    Devuelve el int (> 0) o None si no es un entero válido. Hace falta para
+    comparar con lo guardado en checkout_idempotencia (INTEGER): 12 != "12"."""
+    if isinstance(valor, bool):
+        return None
+    if isinstance(valor, int):
+        return valor if valor > 0 else None
+    if isinstance(valor, str) and valor.strip().isascii() and valor.strip().isdecimal():
+        n = int(valor.strip())
+        return n if n > 0 else None
+    return None
+
+
 @bp.route("/api/checkout/fallas-simuladas", methods=["GET"])
 def fallas_simuladas():
     """Le dice al frontend si puede ofrecer el selector de falla simulada."""
@@ -165,6 +179,11 @@ def procesar_checkout():
 
     if not all([id_comprador, id_direccion, metodo_pago]):
         return jsonify({"error": "id_comprador, id_direccion y metodo_pago son obligatorios"}), 400
+    # A partir de aquí id_comprador es siempre int (la comparación con la clave
+    # de idempotencia, la clave del carrito y el SP ven el mismo valor).
+    id_comprador = _id_entero(id_comprador)
+    if id_comprador is None:
+        return jsonify({"error": "id_comprador debe ser un número entero positivo"}), 400
     if clave_idempotencia is not None and not (
         isinstance(clave_idempotencia, str) and PATRON_CLAVE_IDEMPOTENCIA.match(clave_idempotencia)
     ):

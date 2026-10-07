@@ -38,12 +38,12 @@ backend/
       compradores.py             # GET /api/compradores/<id_comprador>/pedidos (pedidos con líneas + total gastado sin cancelados)
       carrito.py                 # GET/DELETE /api/carrito/<id_usuario>, POST /api/carrito/<id_usuario>/items, PUT/DELETE /api/carrito/<id_usuario>/items/<id_producto> (Redis)
       checkout.py                 # POST /api/checkout (clave de idempotencia + reservas de oferta + sp_procesar_checkout + outbox, en una transacción), GET /api/checkout/fallas-simuladas
-      catalogo.py                  # GET/POST /api/categorias, GET /api/categorias/<id>/filtros, GET/POST /api/productos (GET paginado: {items, total, pagina, por_pagina, total_paginas}), GET /api/productos/<id>
-      historial.py                  # GET /api/historial (feed de eventos con filtros), GET /api/historial/<producto_id> (estado point-in-time)
+      catalogo.py                  # GET/POST /api/categorias, GET /api/categorias/<id>/filtros, GET/POST /api/productos (GET paginado: {items, total, pagina, por_pagina, total_paginas}; orden estable precio_base + _id, o textScore + _id con q, para que las páginas no repitan ni salten productos), GET /api/productos/<id>
+      historial.py                  # GET /api/historial (feed de eventos con filtros, paginado: {eventos, total, pagina, por_pagina, total_paginas}, 20 por defecto, máx 100, `limit` como alias; orden fecha_evento desc + _id desc), GET /api/historial/<producto_id> (estado point-in-time)
       ofertas.py                     # POST /api/ofertas, GET/DELETE /api/ofertas/<producto_id>, POST /api/ofertas/<producto_id>/reservar (Redis)
       resenas.py                      # POST /api/resenas, GET /api/resenas/<producto_id> (Mongo + espejo en Neo4j)
       fraude.py                        # GET /api/fraude/alertas (Neo4j, solo administrador)
-      busqueda.py                       # GET /api/busqueda (facetas, sugerencia), GET /api/busqueda/autocompletar (Elasticsearch)
+      busqueda.py                       # GET /api/busqueda (facetas, sugerencia; páginas más allá de la ventana de 10000 resultados → 200 con items vacíos; ES rechaza la consulta → 400 BUSQUEDA_NO_VALIDA; solo conexión/timeout/índice inexistente/5xx → 503 BUSCADOR_NO_DISPONIBLE), GET /api/busqueda/autocompletar (Elasticsearch)
       sincronizacion.py                 # GET /api/sincronizacion/eventos, POST .../procesar, POST .../reintentar-fallidos (solo administrador)
       vendedores.py                     # GET /api/vendedores/<id>/ventas
 ```
@@ -70,3 +70,10 @@ Al agregar una ruta nueva, ubícala en el blueprint del dominio que corresponda 
 - Antes de asumir que Postgres, Mongo, Redis o Neo4j están corriendo, compruébalo (`netstat`/`Get-NetTCPConnection` en el puerto correspondiente, o un intento de conexión corto con `serverSelectionTimeoutMS` bajo para Mongo) en vez de lanzar el server a ciegas.
 - Para probar un endpoint end-to-end: levanta `python backend/main.py` (queda en `http://127.0.0.1:8000`) y pruébalo con `curl`, no asumas que compila = que funciona.
 - Si tocas el checkout o cualquier ruta que combine varias bases (Postgres, Mongo, Redis, Neo4j), razona explícitamente sobre condiciones de carrera y sobre qué pasa si una de las dos bases falla a mitad de la operación.
+
+# Coordinación con los demás agentes y con el usuario
+- **Servidores compartidos:** el usuario suele tener corriendo el backend (`http://127.0.0.1:8000`, Flask en modo debug: se recarga solo al guardar un `.py`) y Vite (`http://127.0.0.1:5173`, recarga en caliente) para ver los cambios en vivo. Antes de levantar uno, comprueba si ya responde; si es así, reutilízalo y **no lo detengas**. Si levantaste uno tú, detén solo ese al terminar.
+- **Entorno Windows:** usa el Python del venv (`venv/Scripts/python`, con `PYTHONIOENCODING=utf-8`); el `python` del sistema puede no existir.
+- **Documentación:** no la dejes desactualizada en silencio. Al terminar, incluye en tu reporte una sección "Documentación a actualizar" con los archivos (README, `docs/STACK.md`, `docs/arquitectura.md`, ADRs, informe de la entrega, `frontend/app/README.md`) y qué dato cambió, para que el orquestador se lo pase al agente `documentacion`. Si no cambió nada documentado, dilo.
+- **Hallazgos:** los bugs conocidos y su estado viven en `docs/hallazgos.md` (H-NNN). Si tu tarea corrige uno, cítalo por su número en el reporte para que `documentacion` lo cierre.
+- **Pruebas:** el agente `tester` verifica tu trabajo de punta a punta después; deja en el reporte qué endpoints o pantallas tocaste para que sepa qué priorizar.

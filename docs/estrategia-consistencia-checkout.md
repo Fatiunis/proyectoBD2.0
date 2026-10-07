@@ -1,6 +1,6 @@
 # Estrategia de consistencia del checkout distribuido
 
-Entrega 3 · TiendaYa · última actualización: 5 de octubre de 2026
+Entrega 3 · TiendaYa · última actualización: 6 de octubre de 2026
 
 Este documento identifica cada componente que participa en el checkout, cada punto en el que el flujo puede fallar a medias y el mecanismo con el que se mitiga cada uno. También describe la prueba de falla simulada que lo respalda. El código está en [`backend/app/blueprints/checkout.py`](../backend/app/blueprints/checkout.py) y en [`backend/app/sincronizacion.py`](../backend/app/sincronizacion.py), y la evidencia, en [`docs/evidencia/prueba_fallas_checkout.txt`](evidencia/prueba_fallas_checkout.txt).
 
@@ -118,6 +118,8 @@ El relevo toma los eventos con `SELECT ... FOR UPDATE SKIP LOCKED`, así que si 
 
 El navegador genera una clave (`crypto.randomUUID()`) por cada intento de compra y **la conserva entre reintentos**. Solo la cambia cuando la compra se confirma. Esto resuelve el caso más peligroso de todos: la respuesta del pago se pierde (timeout, se cae la red) y el usuario no sabe si se le cobró. Reintentar con la misma clave devuelve el pedido original (`200`, `"repetido": true`) si ya se había confirmado, o hace la compra si no.
 
+La clave queda asociada al comprador que la usó; si llega con otro `id_comprador`, responde `409 CLAVE_IDEMPOTENCIA_AJENA`. Para que esa comparación no dependa del tipo de dato del JSON, `id_comprador` se normaliza a entero al inicio del checkout: se acepta un número (`12`) o un string numérico (`"12"`), y cualquier otro valor responde `400`. Hasta el 2026-10-06, reintentar con `"12"` la propia compra respondía `409` ([H-004](hallazgos.md)).
+
 ## 5. Puntos de falla y su mitigación
 
 Para cada punto: qué queda guardado, qué ve el usuario y qué escenario de la prueba lo demuestra (sección 7).
@@ -135,7 +137,7 @@ Para cada punto: qué queda guardado, qué ve el usuario y qué escenario de la 
 | F9 | El proceso **muere justo después** del COMMIT | Pedido confirmado; eventos sin ejecutar | Los eventos ya están en la tabla; el relevo los ejecuta al volver | Error de conexión; el reintento con la misma clave devuelve el pedido | (cubierto por E3/E4) |
 | F10 | **Redis cae después** del COMMIT | Pedido válido; las líneas pagadas siguen en el carrito; reservas sin cerrar | Eventos `limpiar_carrito` y `confirmar_reserva_oferta` pendientes. **Además, todo checkout aplica antes la limpieza pendiente de ese comprador**, así lo ya pagado no se puede cobrar otra vez, ni siquiera con otra clave | `201` con `sincronizacion_pendiente`: "Tu pedido está confirmado… tu carrito puede tardar unos segundos en actualizarse" | **E3** |
 | F11 | **MongoDB cae después** del COMMIT | La página del producto muestra el stock viejo | Evento `stock_mongo` pendiente; el relevo lo corrige | `201` con aviso de sincronización pendiente | **E4** |
-| F12 | **Elasticsearch cae** (después del COMMIT, o directamente está caído) | El buscador muestra el stock viejo o no responde | Evento `stock_elasticsearch` pendiente. El checkout **no depende** del buscador. La búsqueda cae a la de MongoDB con un aviso | `201`; en el buscador, "búsqueda simplificada" | **E5** (caída real) |
+| F12 | **Elasticsearch cae** (después del COMMIT, o directamente está caído) | El buscador muestra el stock viejo o no responde | Evento `stock_elasticsearch` pendiente. El checkout **no depende** del buscador. Si el motor no está disponible, el buscador responde `503` y la búsqueda cae a la de MongoDB con un aviso (si Elasticsearch está arriba y rechaza la consulta, responde `400 BUSQUEDA_NO_VALIDA`, sin respaldo) | `201`; en el buscador, "búsqueda simplificada" | **E5** (caída real) |
 | F13 | Falla la **compensación** (Redis cae justo después de que falló PostgreSQL) | Unidades de la oferta "perdidas" | Criterio conservador: se prefiere dejar unidades sin vender antes que sobrevender | `503` igual que F5 | — |
 | F14 | Un evento **agota sus 10 intentos** | Evento `fallido` | Queda visible en el panel admin, con su último error, y se puede volver a encolar con un clic | — (solo afecta proyecciones de lectura) | — |
 
@@ -143,8 +145,8 @@ Para cada punto: qué queda guardado, qué ve el usuario y qué escenario de la 
 
 | Dato | Puede quedar desactualizado respecto de PostgreSQL… | Durante cuánto |
 |---|---|---|
-| Stock en MongoDB (página del producto) | si MongoDB falla tras el COMMIT | Hasta el siguiente intento del relevo: el primer reintento llega entre 5 y 20 s después (5 s de espera más hasta 15 s del ciclo del relevo). En las pruebas convergió en 8 a 20 s |
-| Stock en Elasticsearch (buscador) | si Elasticsearch falla tras el COMMIT o está caído | Mientras esté caído, más un ciclo del relevo. En la prueba con caída real convergió 25 s después de levantarlo |
+| Stock en MongoDB (página del producto) | si MongoDB falla tras el COMMIT | Hasta el siguiente intento del relevo: el primer reintento llega entre 5 y 20 s después (5 s de espera más hasta 15 s del ciclo del relevo). En la prueba E4 ([evidencia](evidencia/prueba_fallas_checkout.txt)) convergió en 20 s (12 s y 16 s en las dos corridas del 2026-10-06) |
+| Stock en Elasticsearch (buscador) | si Elasticsearch falla tras el COMMIT o está caído | Mientras esté caído, más un ciclo del relevo. En la prueba con caída real (E5) convergió 25 s después de levantarlo (31 s y 15 s en las dos corridas del 2026-10-06) |
 | Contenido del carrito en Redis | si Redis falla tras el COMMIT | Hasta el siguiente reintento, o hasta que el comprador vuelva a pagar (en ese caso se aplica en el acto) |
 | Reserva de oferta "en_pago" sin cerrar | si Redis falla tras el COMMIT | Hasta el reintento; como máximo, 5 min (se purga sola, ya contada como vendida) |
 

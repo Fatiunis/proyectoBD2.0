@@ -4,3 +4,6 @@ __pycache__/
 *.pyc
 .env
 .claude/settings.local.json
+# Respaldos y variantes del .env (pueden traer contraseñas); la plantilla sí se versiona
+.env.*
+!.env.example

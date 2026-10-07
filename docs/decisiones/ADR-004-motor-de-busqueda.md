@@ -4,7 +4,7 @@ Fecha: 2026-10-05 (Entrega 3)
 
 ## Contexto
 
-Hasta la Entrega 2, la búsqueda del catálogo usaba el índice de texto de MongoDB (`idx_texto_busqueda`, `$text` con stemming en español), sobre los 1019 productos de la semilla. Funciona con palabras completas y bien escritas, pero no cumple lo que pide la Entrega 3: tolerancia a variaciones, relevancia y filtros facetados. Mismas búsquedas, contra el sistema real, el 5 de octubre de 2026:
+Hasta la Entrega 2, la búsqueda del catálogo usaba el índice de texto de MongoDB (`idx_texto_busqueda`, `$text` con stemming en español), sobre los 1015 productos de la semilla (15 originales + 1000 de la semilla masiva; la versión inicial de este ADR decía 1019; cifra corregida el 2026-10-06 contra MongoDB). Funciona con palabras completas y bien escritas, pero no cumple lo que pide la Entrega 3: tolerancia a variaciones, relevancia y filtros facetados. Mismas búsquedas, contra el sistema real, el 5 de octubre de 2026:
 
 | Búsqueda | MongoDB `$text` | Qué buscaba el usuario |
 |---|---|---|
@@ -56,7 +56,7 @@ Definición completa en [`database/elasticsearch/productos_indice.json`](../../d
 | `nombre.sugerencia` | Solo minúsculas y sin acentos, **sin stemming** | El corrector ("¿quisiste decir?") debe proponer palabras reales, no raíces como "audifon" |
 | `nombre.orden` | `keyword` con normalizador | Desempate alfabético estable |
 | `categoria.nombre`, `marca`, `vendedor.nombre_comercial` | `keyword` | Facetas (`terms`): necesitan el valor exacto, no tokens |
-| `atributos` | `flattened` | Cada categoría tiene atributos distintos (126 claves distintas en el catálogo). Con mapeo dinámico, cada clave sería un campo nuevo (*mapping explosion*); `flattened` los guarda en un solo campo que igual se puede filtrar por clave |
+| `atributos` | `flattened` | Cada categoría tiene atributos distintos (unas 125 claves distintas en el catálogo: la versión inicial decía 126 y se midieron 124 el 2026-10-06; varía con los atributos personalizados que se cargan desde el admin). Con mapeo dinámico, cada clave sería un campo nuevo (*mapping explosion*); `flattened` los guarda en un solo campo que igual se puede filtrar por clave |
 | `precio_base` | `scaled_float` (factor 100) | Precio con 2 decimales exactos, más compacto que `double`, para filtros de rango y orden |
 | `imagen_portada` | `keyword` con `index: false` | Solo se muestra; no se busca ni se agrega por él |
 
@@ -87,6 +87,7 @@ Mismas búsquedas que en el Contexto, ahora con Elasticsearch ([evidencia comple
 **Beneficios:**
 - Búsqueda tolerante a errores, sinónimos y prefijos, con relevancia ajustada al catálogo real y facetas en una sola consulta.
 - Si Elasticsearch no está disponible, la búsqueda **se degrada** (no se rompe): `GET /api/busqueda` responde `503 BUSCADOR_NO_DISPONIBLE`, el frontend repite la búsqueda contra el `$text` de MongoDB y le avisa al usuario que es una búsqueda simplificada.
+  - *Nota (2026-10-06):* la decisión no cambia, pero se precisó cuándo se responde `503`. Antes, cualquier error de Elasticsearch (incluido un `400` porque la consulta pedía una página más allá de su ventana de 10 000 resultados) se trataba como una caída y mandaba al respaldo con el motor funcionando. Ahora el `503 BUSCADOR_NO_DISPONIBLE` es solo para conexión, timeout, índice o alias inexistente (`404`), `401`/`403`, `429` y `5xx`; un `400` de Elasticsearch se responde `400 BUSQUEDA_NO_VALIDA`, sin respaldo. Las páginas fuera de esa ventana responden `200` con `items` vacíos (con el total y las facetas reales), `total_paginas` cuenta solo las páginas alcanzables, y un `precio_min`/`precio_max` no finito (`nan`, `inf`) responde `400`. Ver [H-002 y H-003](../hallazgos.md).
 - Reindexar (por ejemplo, para cambiar el mapping) no corta el servicio: se construye un índice nuevo, se verifica la cantidad de documentos y recién entonces se mueve el alias.
 
 **Limitaciones asumidas:**

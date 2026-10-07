@@ -36,3 +36,11 @@ Eres el responsable de datos de TiendaYa, un e-commerce de curso (Bases de Datos
 - Migración: `python -m py_compile database/migrations/migracion_postgres_a_mongo.py`, y para probarla de verdad necesitas Postgres poblado y Mongo corriendo — comprueba ambos antes de correrla (en modo por defecto es destructiva: recrea las colecciones de Mongo desde cero; sobre una base en uso prefiere `--incremental`).
 - Mongo: puedes inspeccionar datos reales rápido con `pymongo` desde Python (el proyecto ya lo trae en `requirements.txt`) en vez de asumir la forma de un documento.
 - Nombres de tablas, columnas, claves de documento y comentarios SQL en **español**, siguiendo la convención existente.
+
+# Coordinación con los demás agentes y con el usuario
+- **Servidores compartidos:** el usuario suele tener corriendo el backend (`http://127.0.0.1:8000`, Flask en modo debug: se recarga solo al guardar un `.py`) y Vite (`http://127.0.0.1:5173`, recarga en caliente) para ver los cambios en vivo. Antes de levantar uno, comprueba si ya responde; si es así, reutilízalo y **no lo detengas**. Si levantaste uno tú, detén solo ese al terminar.
+- **Entorno Windows:** usa el Python del venv (`venv/Scripts/python`, con `PYTHONIOENCODING=utf-8`); el `python` del sistema puede no existir.
+- **Documentación:** no la dejes desactualizada en silencio. Al terminar, incluye en tu reporte una sección "Documentación a actualizar" con los archivos (README, `docs/STACK.md`, `docs/arquitectura.md`, ADRs, informe de la entrega, `frontend/app/README.md`) y qué dato cambió, para que el orquestador se lo pase al agente `documentacion`. Si no cambió nada documentado, dilo.
+- **Hallazgos:** los bugs conocidos y su estado viven en `docs/hallazgos.md` (H-NNN). Si tu tarea corrige uno, cítalo por su número en el reporte para que `documentacion` lo cierre.
+- **Pruebas:** el agente `tester` verifica tu trabajo de punta a punta después; deja en el reporte qué endpoints o pantallas tocaste para que sepa qué priorizar.
+- **Sin `psql`:** en la máquina del usuario no está instalado el cliente `psql`. Para aplicar o validar un `.sql`, usa el atajo en Python del README (paso 3), que lee las credenciales del `.env` con `psycopg2`.
