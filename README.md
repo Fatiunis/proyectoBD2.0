@@ -11,6 +11,47 @@ Portal de comercio electrónico con arquitectura de datos políglota (proyecto d
 - **Backend**: Flask con application factory (`backend/main.py` → `backend/app/create_app()`), organizado en **Blueprints** por dominio y **SQLAlchemy** para todo el acceso a PostgreSQL. Expone una API REST consumida por el frontend.
 - **Frontend**: **Vue 3 + Vite + Tailwind v4** (`frontend/app/`) — sitio público (catálogo paginado, carrito, checkout, reseñas, oferta límite, página de ofertas flash, "Mi cuenta" del comprador, buscador con facetas) y panel admin (catálogo, categorías, usuarios, ventas, ofertas flash del vendedor, historial, fraude, sincronización).
 
+## Novedades: detección de fraude ampliada (2026-10-07)
+
+Amplía la detección de fraude en reseñas de la Entrega 2 con cuatro patrones nuevos sobre el mismo grafo de Neo4j. Es un cambio posterior a la Entrega 3 (no es de la Entrega 4). **Lo de la Entrega 2 sigue igual**: `GET /api/fraude/alertas` (los anillos de 3 cuentas), su formato y la semilla `sembrar_resenas_fraude.py` no cambian; todo lo nuevo se agrega al lado. La explicación completa (patrones, umbrales, puntajes y cómo se probó) está en [`docs/deteccion-fraude-ampliada.md`](docs/deteccion-fraude-ampliada.md), y la decisión de diseño en [ADR-007](docs/decisiones/ADR-007-deteccion-fraude-ampliada.md).
+
+Para ponerte al día (con Docker levantado, `docker compose up -d`, y el `venv` activado):
+
+1. **`git pull`**. No hay dependencias nuevas de Python ni de npm, ni migraciones de PostgreSQL o MongoDB.
+2. **Aplica las constraints nuevas del grafo** (`Vendedor.id_vendedor` y `Direccion.clave`; seguro de repetir):
+   ```bash
+   docker compose exec -T neo4j cypher-shell -u neo4j -p tiendaya123 < database/neo4j/02_fraude_ampliado.cypher
+   ```
+   Ese comando funciona en Git Bash, `cmd` y macOS/Linux. En PowerShell, que no tiene el operador `<`, usa `Get-Content database/neo4j/02_fraude_ampliado.cypher | docker compose exec -T neo4j cypher-shell -u neo4j -p tiendaya123`. (El script del paso siguiente también crea estas constraints si faltan.)
+3. **Completa el grafo con lo que ya tenías** (vendedor de cada producto, si cada reseña tiene compra verificada y las direcciones de envío de cada cuenta). Solo agrega al grafo: no borra nada ni toca MongoDB ni PostgreSQL, y se puede repetir:
+   ```bash
+   python database/migrations/sincronizar_grafo_fraude.py
+   ```
+4. **Siembra los escenarios de prueba de los patrones nuevos** (crea 24 compradores `@fraude-demo.tiendaya.gt`, ver [Credenciales de prueba](#credenciales-de-prueba), con sus reseñas y direcciones; al terminar vuelve a sincronizar el grafo). Solo borra lo que sembró él mismo en una corrida anterior, así que se puede repetir:
+   ```bash
+   python database/migrations/sembrar_fraude_ampliado.py
+   ```
+   Si algún día vuelves a correr `sembrar_resenas_fraude.py` (que borra **todas** las reseñas), repite después los pasos 3 y 4, en ese orden.
+5. **Reinicia el backend** (`python backend/main.py`). Si el backend se cae solo al guardar un archivo, con `OSError: [WinError 10038]`, vuelve a lanzarlo: es un problema del recargador de Flask en Windows ([H-019](docs/hallazgos.md)).
+6. **Dónde verlo**: entra como `admin@tiendaya.com` al panel `/admin/fraude`. Con la semilla, cada pestaña de patrón tiene al menos una alerta. Por la API: `curl "http://127.0.0.1:8000/api/fraude/resumen?rol_solicitante=administrador"`. Para comprobarlo todo de una vez: `python backend/scripts/prueba_fraude_ampliado.py` (con el backend corriendo; 59/59 verificaciones).
+
+Qué se construyó, en concreto:
+- **Cuatro patrones nuevos** en `backend/app/blueprints/fraude.py`, cada uno con umbrales que se pueden cambiar por parámetro:
+  - `cuenta_rafaga` (**Cuenta en ráfaga**): una cuenta que publica muchas reseñas en muy poco tiempo, casi todas de productos que nunca compró. Por defecto: 5 reseñas en 1 hora, con al menos 80 % sin compra.
+  - `grupo_coordinado` (**Grupo coordinado**): varias cuentas que califican igual los mismos productos casi al mismo tiempo, para subirles la nota (5 estrellas) o para hundirlos (1-2 estrellas). Por defecto: 3 cuentas, 2 productos en común, ventana de 6 horas. A diferencia del anillo de la Entrega 2 (tríos, 3 productos, solo 5 estrellas), detecta grupos de cualquier tamaño y también los ataques con reseñas malas.
+  - `sesgo_vendedor_sin_compra` (**Cuenta sesgada hacia un vendedor**): una cuenta que califica varios productos de la misma tienda sin haberle comprado nada, siempre con 5 estrellas (para inflarla) o siempre con 1-2 (para hundirla). Por defecto: 3 reseñas.
+  - `cuentas_vinculadas` (**Cuentas vinculadas**): cuentas que envían a la misma dirección y califican igual los mismos productos, probablemente una sola persona con varias cuentas. Por defecto: 2 productos en común.
+  - Cada alerta trae las cuentas, los productos, el vendedor (si aplica), un **puntaje de 0 a 100** con su **nivel** (`alto` desde 70, `medio` desde 40, `bajo` por debajo), un motivo en texto y la evidencia (los números que la dispararon).
+- **Rutas nuevas** (solo administrador: sin `rol_solicitante=administrador` responden `403`; si Neo4j no está disponible, `503` con `codigo: "GRAFO_NO_DISPONIBLE"`):
+  - `GET /api/fraude/patrones`: los 4 patrones, con nombre, descripción y umbrales por defecto.
+  - `GET /api/fraude/alertas/<tipo>`: las alertas de un patrón, de mayor a menor puntaje (hasta 50). Acepta los umbrales del patrón como parámetros enteros (por ejemplo `?min_resenas=4`); un valor inválido responde `400` y un tipo desconocido, `404`. Devuelve `{tipo, alertas, total, parametros}`.
+  - `GET /api/fraude/resumen`: corre los 4 patrones con sus umbrales por defecto y devuelve cuántas alertas tiene cada uno (`por_tipo`, `total_alertas`) y las cuentas de mayor riesgo (`cuentas_riesgo`, con los patrones en que aparece cada una).
+- **Grafo ampliado, sin quitar nada del de la Entrega 2**: nodos `(:Vendedor)` y `(:Direccion)`, relaciones `(:Producto)-[:VENDIDO_POR]->(:Vendedor)` y `(:Cuenta)-[:ENVIA_A]->(:Direccion)`, y la propiedad `compra_verificada` en cada `CALIFICO` (mismo criterio que el "compra verificada" del listado de reseñas). Una dirección se identifica por una clave normalizada (minúsculas y espacios simples en la línea 1, la ciudad y el código postal), así que dos cuentas que escriben la misma dirección con distintas mayúsculas o espacios llegan al mismo nodo. Constraints en `database/neo4j/02_fraude_ampliado.cypher`.
+- **Sincronización en mejor esfuerzo** (`backend/app/grafo_fraude.py`, nuevo): al crear una reseña, `resenas.py` guarda además en Neo4j si hubo compra y el vendedor del producto; al crear, editar o borrar una dirección, `direcciones.py` actualiza sus `ENVIA_A`. Igual que el espejo de reseñas de la Entrega 2, si Neo4j falla, la reseña o la dirección quedan guardadas igual y solo se registra una advertencia; `sincronizar_grafo_fraude.py` repara el grafo.
+- **Panel `/admin/fraude` con pestañas**: **Resumen** (conteo por patrón y tabla de cuentas de mayor riesgo, con su nivel y los patrones en que aparecen), **Anillos de reseñas** (la consulta de la Entrega 2, la de siempre) y una pestaña por cada patrón nuevo, con su URL propia (`/admin/fraude?patron=cuenta_rafaga`, etc.) y los umbrales editables. El panel muestra el nivel de cada alerta y cuenta, no el puntaje numérico (ese viene en la API). Detalle en [`frontend/app/README.md`](frontend/app/README.md#panel-de-fraude).
+- **Prueba automática**: `backend/scripts/prueba_fraude_ampliado.py` (59/59 verificaciones, [evidencia](docs/evidencia/prueba_fraude_ampliado.txt)): cada escenario positivo aparece en su patrón, cada control no, la consulta de la Entrega 2 sigue igual, los errores (`403`, `404`, `400`) y la sincronización de reseñas y direcciones con Neo4j. Para provocar una alerta a mano, la [guía de prueba de fraude](docs/guia-prueba-fraude.md) tiene una sección nueva para los patrones ampliados.
+- Hallazgos de esta parte: H-019 a H-024 en [`docs/hallazgos.md`](docs/hallazgos.md).
+
 ## Novedades después de la Entrega 3 (2026-10-07)
 
 Son cambios sobre lo entregado en la Entrega 3 (no son de la Entrega 4). Para ponerte al día:
@@ -89,6 +130,7 @@ Qué se construyó, en concreto:
   - Requiere aplicar `database/postgres/migracion_sp_checkout_precio_oferta.sql` en las bases que ya existían (ver el paso 3 de Instalación).
 - **Reseñas de producto**: sistema nuevo desde cero — cualquier comprador puede calificar (1-5) y comentar un producto una sola vez, visible en `/producto/:id`. El formulario está al final de la página del producto; se llega directo con el enlace "★ Escribir reseña" bajo el precio, o con "Dejar reseña" desde el resumen de compra (URL `/producto/:id#escribir-resena`).
 - **Detección de fraude en reseñas**: cada reseña se sincroniza a un grafo en Neo4j; el panel admin (`/admin/fraude`, solo administrador) corre una consulta de varios saltos que señala cuentas que se recalifican entre sí sobre los mismos productos. Para provocar una alerta a propósito, revisarla en el panel y limpiar los datos después, sigue [`docs/guia-prueba-fraude.md`](docs/guia-prueba-fraude.md).
+  - Desde el 2026-10-07 hay además cuatro patrones nuevos; esta consulta sigue igual, en la pestaña "Anillos de reseñas". Ver [Novedades: detección de fraude ampliada](#novedades-detección-de-fraude-ampliada-2026-10-07).
 - **Direcciones de envío en el checkout**: el checkout ya no pide escribir el ID de la dirección (antes había que adivinarlo y fallaba con "La dirección X no pertenece al comprador Y"). Ahora muestra un selector con las direcciones del comprador, con la principal ya elegida, y un mini formulario para agregar una si no tiene ninguna o quiere otra. Lo respalda un blueprint nuevo (`direcciones.py`: `GET`/`POST /api/usuarios/<id_usuario>/direcciones`); la primera dirección de un usuario queda como principal y marcar otra como principal desmarca la anterior.
 - **Imágenes en el formulario de producto del admin**: al crear o editar un producto se pueden agregar hasta 10 links de imagen (http/https), con vista previa, elección de portada y orden (↑/↓). Detalle en [Imágenes de los productos](#imágenes-de-los-productos).
 - **"Mi cuenta" del comprador**: un comprador con sesión iniciada ve el botón "Mi cuenta" en la barra de navegación, con tres pestañas:
@@ -113,6 +155,8 @@ Qué se construyó, en concreto:
 
 **Después de la Entrega 3 (2026-10-07)** — ofertas flash visibles en el sitio público y pestaña de ofertas del vendedor, "Mis ventas" para el administrador y carrito sin expiración por defecto (decidido en [ADR-006](docs/decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md)). Ver "Novedades después de la Entrega 3" arriba.
 
+**Detección de fraude ampliada (2026-10-07)** — cuatro patrones nuevos sobre el grafo de Neo4j (`cuenta_rafaga`, `grupo_coordinado`, `sesgo_vendedor_sin_compra` y `cuentas_vinculadas`), con puntaje de riesgo, resumen por cuenta y panel con pestañas; la consulta de anillos de la Entrega 2 sigue igual. Prueba automática 59/59 y verificación final del agente de pruebas en [`docs/hallazgos.md`](docs/hallazgos.md) ("Verificación del fraude ampliado"). Ver "Novedades: detección de fraude ampliada" arriba y [`docs/deteccion-fraude-ampliada.md`](docs/deteccion-fraude-ampliada.md).
+
 **Informe de la Entrega 1:** [`docs/Entrega 1 Base de Datos 2 (1).pdf`](<docs/Entrega 1 Base de Datos 2 (1).pdf>) (diagrama entidad-relación, justificación de la normalización y decisiones de embeber/referenciar).
 
 **Hallazgos de las pruebas:** los errores y pendientes que encontramos al probar (con su estado, cómo reproducirlos y la corrección propuesta) se registran en [`docs/hallazgos.md`](docs/hallazgos.md). Revísalo antes de reportar un error, por si ya está anotado.
@@ -128,6 +172,7 @@ Qué se construyó, en concreto:
 - El precio de oferta se valida al crearla contra el `precio_base` de MongoDB, y en el checkout contra el de PostgreSQL. Si un producto se editó solo en Mongo y los dos precios no coinciden, una oferta que se creó sin problema puede fallar al pagar. En ese caso el checkout devuelve las unidades a la oferta.
 - Con el valor por defecto (`CARRITO_TTL_SEGUNDOS=0`) el carrito no expira, así que los carritos abandonados no se borran solos y ocupan memoria en Redis. Para que expiren por inactividad hay que poner un valor mayor que 0 en el `.env` ([ADR-006](docs/decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md)). Las reservas de oferta del carrito sí vencen siempre.
 - La sincronización de una reseña hacia Neo4j es de mejor esfuerzo (sin 2PC): si Neo4j no está disponible al crear la reseña, esta igual queda guardada en Mongo y solo se registra una advertencia en el log del backend.
+- Desde la detección de fraude ampliada (2026-10-07), las direcciones de envío también se copian a Neo4j en mejor esfuerzo. Si dos cambios de direcciones del mismo usuario se confirman casi a la vez, el grafo puede quedar con la versión anterior hasta la próxima edición de direcciones o hasta correr `database/migrations/sincronizar_grafo_fraude.py` ([H-020](docs/hallazgos.md)). Mientras tanto, `cuentas_vinculadas` puede ver una dirección vieja.
 - El historial de cambios del producto no registra el stock: cada evento guarda nombre, descripción, precio, estado activo/inactivo y atributos. La reconstrucción por fecha indica si el producto estaba disponible para la venta (activo), pero no cuántas unidades había en existencia en ese momento.
 
 ## Requisitos previos
@@ -345,6 +390,13 @@ Siembra reseñas de prueba con un patrón de fraude detectable (ruido legítimo 
 python database/migrations/sembrar_resenas_fraude.py
 ```
 
+Para la detección de fraude ampliada (desde el 2026-10-07), completa el grafo y siembra sus escenarios, en este orden y después de `sembrar_resenas_fraude.py` (los dos se pueden repetir; las constraints de `database/neo4j/02_fraude_ampliado.cypher` las crea el primero si faltan, y también se pueden aplicar como en las [novedades](#novedades-detección-de-fraude-ampliada-2026-10-07)):
+
+```bash
+python database/migrations/sincronizar_grafo_fraude.py
+python database/migrations/sembrar_fraude_ampliado.py
+```
+
 ### 6. Levantar el backend
 
 ```bash
@@ -404,6 +456,7 @@ Todos los usuarios semilla usan la misma contraseña: **`Tiendaya123!`**
 | contacto@modaurbana.com | vendedor | Igual que el anterior |
 | carlos.mendez@email.com | comprador | Dirección de envío registrada; "Mi cuenta" con pedidos, perfil y direcciones |
 | sofia.lopez@email.com | comprador | Dirección de envío registrada |
+| `<nombre>.<apellido>@fraude-demo.tiendaya.gt` (por ejemplo `kevin.barrios@fraude-demo.tiendaya.gt`) | comprador | 24 cuentas de los escenarios de la detección de fraude ampliada, creadas por `database/migrations/sembrar_fraude_ampliado.py`. Solo tienen las reseñas y direcciones de la semilla, sin pedidos. La lista de cuentas por escenario está en el script (`CUENTAS_POR_ESCENARIO`) |
 
 El registro público (`/`) solo crea cuentas de `comprador`. Para crear cuentas de `vendedor` o `administrador` nuevas, usa la pestaña "Usuarios" del panel admin.
 
@@ -467,6 +520,7 @@ backend/
     busqueda_es.py                Elasticsearch: documento del índice, indexar, búsqueda con facetas, autocompletado (Entrega 3)
     sincronizacion.py             Outbox del checkout: registrar y procesar eventos idempotentes + hilo de relevo (Entrega 3)
     ofertas_redis.py              Keys, carga de scripts Lua y wrappers de la oferta (compartido por ofertas, carrito y checkout); pids_con_oferta_activa (SCAN de oferta:*:id)
+    grafo_fraude.py               Sincronización en mejor esfuerzo del grafo de fraude ampliado: compra_verificada, clave normalizada de dirección, ENVIA_A (2026-10-07)
     lua/
       crear_oferta.lua               Crea cupo, límite, precio e id de la oferta en un solo paso (mismo TTL)
       consultar_oferta.lua            Estado de la oferta: disponible, reservado, vendido y la reserva del usuario
@@ -491,10 +545,12 @@ backend/
       ofertas.py                        /api/ofertas (POST crear; GET listado público de ofertas activas), /api/ofertas/<producto_id> (GET, DELETE), /api/ofertas/<producto_id>/reservar, /api/vendedores/<id>/ofertas (ofertas del vendedor) (precio de oferta + reserva de 1 min; Redis + Lua, Entrega 2)
       resenas.py                        /api/resenas (Mongo + sync a Neo4j, Entrega 2)
       fraude.py                         /api/fraude/alertas (consulta Cypher de 3 saltos, Entrega 2)
+                                        + /api/fraude/patrones, /api/fraude/alertas/<tipo>, /api/fraude/resumen (4 patrones, fraude ampliado, 2026-10-07)
   scripts/
     prueba_concurrencia_oferta.py  Evidencia de que la oferta límite no permite sobreventa bajo concurrencia
     prueba_fallas_checkout.py      Evidencia de la estrategia de consistencia: camino feliz + 4 fallas simuladas (E0-E4) + caída real de Elasticsearch (E5) (Entrega 3)
     prueba_buscador.py             Evidencia del buscador: errores de tipeo, sinónimos, autocompletado, facetas, respaldo (Entrega 3)
+    prueba_fraude_ampliado.py      Evidencia de la detección de fraude ampliada: positivos, controles, API original intacta, errores y sincronización (59 verificaciones, 2026-10-07)
 database/
   postgres/
     ddl_tiendaya.sql               Esquema 3FN + semilla + sp_procesar_checkout
@@ -508,6 +564,7 @@ database/
     02_aggregation_queries.js      Consultas de agregación de referencia
   neo4j/
     01_constraints.cypher          Constraints de unicidad para nodos Cuenta/Producto (Entrega 2)
+    02_fraude_ampliado.cypher      Constraints de Vendedor/Direccion y modelo del grafo de fraude ampliado (aditivo, 2026-10-07)
   elasticsearch/
     productos_indice.json          Settings y mapping del índice de productos: analizadores, sinónimos, autocompletado (Entrega 3)
   migrations/
@@ -515,6 +572,8 @@ database/
     generar_semilla_masiva.py       Genera datos_semilla_masivos.sql + datos_semilla_masivos_catalogo.json (determinístico)
     datos_semilla_masivos_catalogo.json  Atributos (incl. personalizados) y 1-3 fotos Unsplash por SKU de la semilla masiva
     sembrar_resenas_fraude.py       Siembra reseñas con un patrón de fraude detectable (Entrega 2, idempotente)
+    sincronizar_grafo_fraude.py     Completa el grafo existente: Vendedor/VENDIDO_POR, CALIFICO.compra_verificada, Direccion/ENVIA_A (no destructivo, idempotente, 2026-10-07)
+    sembrar_fraude_ampliado.py      Escenarios positivos y de control de los 4 patrones nuevos + 24 compradores @fraude-demo.tiendaya.gt (aditivo, idempotente, 2026-10-07)
     indexar_productos_elasticsearch.py  Indexa el catálogo de Mongo en un índice versionado y mueve el alias (Entrega 3)
 frontend/
   app/                        Sitio Vue 3 + Vite (único frontend, ver docs/STACK.md)
@@ -523,9 +582,11 @@ frontend/
       components/publico/           Catálogo, filtros, tarjeta de producto, carrito, checkout, login/registro, reseñas, oferta límite, PerfilComprador ("Mi cuenta"), ResultadosBusqueda (facetas), ofertas flash (OfertasFlash.vue, FranjaOfertasFlash.vue, TarjetaOfertaPublica.vue)
       components/comunes/            Paginacion.vue (compartido por el catálogo público, el del admin, los resultados de búsqueda y el historial)
       components/admin/              Catálogo, categorías, usuarios, ventas, ofertas flash del vendedor (GestionOfertas.vue, FormularioOferta.vue, TarjetaOferta.vue), historial, fraude (GestionFraude.vue), sincronización (GestionSincronizacion.vue), ModalAdmin.vue (se cierra con Escape)
+                                     + fraude ampliado (2026-10-07): ResumenFraude.vue, AnillosResenas.vue (consulta de la Entrega 2), AlertasPatron.vue, AlertaFraude.vue
       composables/                    useSesion, useToast, useCategorias, useCarrito (Redis-backed, Entrega 2), useOfertasFlash (una sola consulta a GET /api/ofertas para la barra, la franja, las tarjetas del catálogo y la página; exporta ofertaDisponible y ofertaActivaDe)
       services/api.js                 apiFetch (wrapper de fetch contra el backend)
       utils/                          categoriaVisual.js, tiempo.js (formatoMinSeg, formatoCuentaRegresiva), descuento.js (% de descuento: usa el descuento_pct del servidor si viene; si no, lo calcula con el mismo redondeo half-up, en centavos enteros; entre 0 y 99 mientras se cobre algo)
+                                      + fraude.js (2026-10-07): niveles, etiquetas de patrones, umbrales y evidencia, mensajes de error del panel de fraude
 docs/
   STACK.md                   Bitácora técnica completa: qué cambió en cada fase, por qué, y qué se verificó
   arquitectura.md            Diagrama de arquitectura actualizado (Entrega 3)
@@ -535,10 +596,13 @@ docs/
     ADR-003-redis-carrito-y-oferta.md  Registro de decisión: Redis para el carrito y la oferta de inventario limitado
     ADR-004-motor-de-busqueda.md       Registro de decisión: Elasticsearch para el buscador y diseño del mapping
     ADR-005-newsql-pagos.md            Evaluación NewSQL para pagos: no migrar, y cuándo sí
+    ADR-007-deteccion-fraude-ampliada.md  Registro de decisión: detección de fraude ampliada sobre el mismo grafo de Neo4j (2026-10-07)
   informe-entrega-2.md       Informe de la Entrega 2 (decisiones, evidencia y responsabilidades)
   informe-entrega-3.md       Informe de la Entrega 3 (buscador, consistencia, prueba de falla, NewSQL)
   evidencia/                 Salidas de las pruebas de la Entrega 3 (fallas del checkout y buscador)
+                             + prueba_fraude_ampliado.txt (detección de fraude ampliada, 2026-10-07)
   guia-prueba-fraude.md      Paso a paso para provocar y revisar una alerta de fraude, y limpiar los datos de prueba
+  deteccion-fraude-ampliada.md  Detección de fraude ampliada: los 4 patrones, umbrales, puntajes, grafo y verificación (2026-10-07)
   guia-funcionalidades.docx  Guía en Word por funcionalidad: qué hace, de qué base saca los datos y en qué archivos está (refleja la Entrega 2, ver H-006)
   hallazgos.md               Registro de hallazgos de las pruebas: errores y pendientes, con su estado y corrección
 docker-compose.yml          Redis + Neo4j (Entrega 2) + Elasticsearch (Entrega 3)

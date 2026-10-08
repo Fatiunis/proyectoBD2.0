@@ -120,6 +120,7 @@ frontend/app/
 | MongoDB | Sin cambios de motor | Sigue siendo el catálogo de productos + historial (event sourcing); Entrega 2 le agrega la colección `resenas`. |
 | Redis | ✅ Nuevo (Entrega 2) | Carrito de compra (`carrito:{id_usuario}`; TTL de 30 min por inactividad en la Entrega 2, sin expiración por defecto desde el 2026-10-07 y configurable con `CARRITO_TTL_SEGUNDOS`) y oferta de inventario limitado (`oferta:{producto_id}:stock`/`:limite`/`:precio`/`:id` con el TTL de la oferta, más el hash `:reservas`; reservas de 1 min y consumo en el checkout, todo con scripts Lua atómicos). Ninguno de los dos es fuente de verdad del inventario real — ver `docs/decisiones/ADR-003-redis-carrito-y-oferta.md` y, para el carrito sin expiración por defecto, `docs/decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md`. |
 | Neo4j | ✅ Nuevo (Entrega 2) | Grafo `(:Cuenta)-[:CALIFICO]->(:Producto)` para detección de fraude en reseñas. Ver `docs/decisiones/ADR-002-grafos-vs-columnar.md` para la justificación frente a la alternativa columnar (descartada por ahora). |
+| Neo4j: fraude ampliado | ✅ 2026-10-07 (después de la Entrega 3) | Mismo grafo, ampliado sin quitar nada: nodos `Vendedor` y `Direccion`, relaciones `VENDIDO_POR` y `ENVIA_A`, propiedad `CALIFICO.compra_verificada` (constraints en `database/neo4j/02_fraude_ampliado.cypher`). Alimenta 4 patrones nuevos en `fraude.py`; la consulta de anillos de la Entrega 2 sigue igual. Ver `docs/deteccion-fraude-ampliada.md`. |
 | Elasticsearch | ✅ Nuevo (Entrega 3) | Buscador del catálogo: índice versionado detrás del alias `productos`, mapping propio (`database/elasticsearch/productos_indice.json`), proyección de solo lectura de la colección Mongo `productos`. Ver `docs/decisiones/ADR-004-motor-de-busqueda.md`. |
 | Consistencia del checkout | ✅ Entrega 3 | Tablas `checkout_idempotencia` y `eventos_sincronizacion` (outbox) en PostgreSQL. Ver `docs/estrategia-consistencia-checkout.md`. Evaluación NewSQL para pagos (no migrar) en `docs/decisiones/ADR-005-newsql-pagos.md`. |
 | Migraciones | Script custom (`database/migrations/migracion_postgres_a_mongo.py`, `sembrar_resenas_fraude.py`, `indexar_productos_elasticsearch.py`; SQL de migración en `database/postgres/migracion_*.sql`) | No se introduce una herramienta de migraciones (Alembic, etc.) en esta fase; se evaluará si SQLAlchemy lo justifica más adelante. |
@@ -561,3 +562,59 @@ frontend/app/
   Verificado con `npm run build` y `GET /api/ofertas?limite=100`. Resumen
   de la verificación del día en `docs/hallazgos.md` ("Verificación del
   2026-10-07").
+- 2026-10-07: **detección de fraude ampliada** (después de la Entrega 3; no
+  es de la Entrega 4). Se agregan cuatro patrones sobre el grafo de Neo4j,
+  sin tocar lo de la Entrega 2: `GET /api/fraude/alertas` (tríos de cuentas
+  con 3 productos en común, 5 estrellas y 6 horas), su formato y
+  `sembrar_resenas_fraude.py` siguen iguales (el diff de `fraude.py` solo
+  agrega líneas). Por qué: el anillo de la Entrega 2 solo ve tríos que se
+  suben la nota entre sí; no ve una cuenta sola que publica en ráfaga, ni
+  grupos que hunden a un producto con 1-2 estrellas, ni cuentas que
+  favorecen o atacan a una tienda sin haberle comprado, ni varias cuentas
+  de una misma persona. Los patrones (`backend/app/blueprints/fraude.py`):
+  `cuenta_rafaga` (5 reseñas en 1 h, al menos 80 % sin compra),
+  `grupo_coordinado` (3 cuentas, 2 productos en común, misma calificación
+  extrema dentro de 6 h; grupos de cualquier tamaño, con 5 estrellas o con
+  1-2), `sesgo_vendedor_sin_compra` (3 reseñas extremas a productos de una
+  tienda sin compra) y `cuentas_vinculadas` (misma dirección de envío y 2
+  productos calificados igual). Cada alerta trae un puntaje de 0 a 100 con
+  nivel (`alto` >= 70, `medio` >= 40) que se calcula en Python con una
+  fórmula documentada en la cabecera de cada detector. Rutas nuevas, solo
+  administrador: `GET /api/fraude/patrones`, `GET
+  /api/fraude/alertas/<tipo>` (umbrales por parámetro; 400, 403, 404 y 503
+  `GRAFO_NO_DISPONIBLE`) y `GET /api/fraude/resumen` (los 4 patrones con sus
+  umbrales por defecto, agregados por cuenta). Para eso el grafo necesita
+  datos que la Entrega 2 no guardaba: el vendedor de cada producto
+  (`(:Vendedor)`, `VENDIDO_POR`, `Producto.id_vendedor`), si cada reseña
+  tiene compra verificada (`CALIFICO.compra_verificada`, mismo criterio que
+  el listado de reseñas, que no filtra por estado del pedido, para que el
+  panel de reseñas y el grafo digan lo mismo) y las direcciones de envío
+  (`(:Direccion)`, `ENVIA_A`). La dirección se identifica con una clave
+  normalizada (minúsculas y espacios simples en línea 1, ciudad y código
+  postal, sin quitar tildes), para que la misma dirección escrita distinto
+  caiga en un solo nodo. Se mantiene el criterio de la Entrega 2 para el
+  espejo: sin 2PC, en mejor esfuerzo y después del commit en la fuente de
+  verdad (`backend/app/grafo_fraude.py`, nuevo, lo usan `resenas.py` y
+  `direcciones.py`); `database/migrations/sincronizar_grafo_fraude.py`
+  completa el grafo existente y sirve para repararlo (solo `MERGE`/`SET`,
+  idempotente). La carrera posible al sincronizar direcciones se aceptó como
+  limitación (H-020). Para demostrar los umbrales,
+  `database/migrations/sembrar_fraude_ampliado.py` siembra, por patrón, un
+  escenario positivo y un control que queda justo por debajo, con 24
+  compradores nuevos `@fraude-demo.tiendaya.gt` (buscados por email, nunca
+  por ID fijo) y borrando solo lo que sembró antes. No se creó índice sobre
+  `CALIFICO.fecha`: las consultas comparan fechas entre reseñas ya
+  alcanzadas, no filtran por un rango absoluto (explicado en
+  `02_fraude_ampliado.cypher`). El panel `/admin/fraude` pasa a tener
+  pestañas: Resumen, Anillos de reseñas (la consulta de la Entrega 2) y una
+  por patrón (`?patron=`), con `ResumenFraude.vue`, `AnillosResenas.vue`,
+  `AlertasPatron.vue`, `AlertaFraude.vue` y `utils/fraude.js`. Verificado:
+  `backend/scripts/prueba_fraude_ampliado.py` 59/59; el ruido legítimo da 0
+  alertas con los umbrales por defecto; `/resumen` con la semilla da 12
+  alertas (1, 4, 6 y 1 por patrón) en 23 cuentas; `GET /api/fraude/alertas`
+  sigue dando los 4 tríos del anillo (más uno de la prueba manual del
+  2026-09-23, H-021); las 151 reseñas de Mongo tienen su `CALIFICO` con
+  `compra_verificada`; `npm run build` OK. Detalle en
+  `docs/deteccion-fraude-ampliada.md`, decisión en
+  `docs/decisiones/ADR-007-deteccion-fraude-ampliada.md` y verificación en `docs/hallazgos.md` ("Verificación
+  del fraude ampliado").

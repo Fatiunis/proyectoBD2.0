@@ -155,6 +155,39 @@ rango); las ofertas no los tienen.
   elegida en el sidebar, filtrando en el navegador por
   `categoria.id_categoria`.
 
+## Panel de fraude
+
+Desde el 2026-10-07 (detección de fraude ampliada). La explicación de los
+patrones está en `docs/deteccion-fraude-ampliada.md` (raíz del repo).
+
+`/admin/fraude` (solo administrador) es `GestionFraude.vue`, ahora con
+pestañas. La pestaña activa va en la URL como `?patron=<tipo>`, así que se
+puede enlazar directo y sobrevive a recargar; sin `?patron=` (o con un valor
+desconocido) se abre el Resumen. Las pestañas se recorren con las flechas,
+Inicio y Fin (`role="tablist"`), y cada una muestra su número de alertas.
+
+| Pestaña | `?patron=` | Componente | API |
+|---|---|---|---|
+| Resumen | (ninguno) | `ResumenFraude.vue`: alertas por patrón (cada tarjeta abre su pestaña) y tabla de cuentas de mayor riesgo (columnas Cuenta, Nivel y Aparece en; sin puntaje numérico) | `GET /api/fraude/resumen` |
+| Anillos de reseñas (Entrega 2) | `anillos_resenas` | `AnillosResenas.vue`: la consulta de anillos de siempre (tríos de cuentas, productos compartidos, detalle expandible) | `GET /api/fraude/alertas` |
+| Cuenta en ráfaga, Grupo coordinado, Cuenta sesgada hacia un vendedor, Cuentas vinculadas | `cuenta_rafaga`, `grupo_coordinado`, `sesgo_vendedor_sin_compra`, `cuentas_vinculadas` | `AlertasPatron.vue` (lista y "Ajustar sensibilidad") + `AlertaFraude.vue` (una alerta: nivel, motivo, cuentas, productos y evidencia; el puntaje numérico no se muestra, solo el nivel que sale de él) | `GET /api/fraude/alertas/<tipo>` |
+
+- Los nombres de las 4 pestañas de patrones y sus umbrales por defecto vienen
+  de `GET /api/fraude/patrones`; el frontend no los repite.
+- "Ajustar sensibilidad" (`AlertasPatron.vue`) permite cambiar los umbrales
+  del patrón y vuelve a pedir las alertas con esos parámetros. Valida antes de
+  enviar: enteros positivos y, para los porcentajes (`min_pct_sin_compra`),
+  entre 1 y 100 (H-024 en `docs/hallazgos.md`).
+- `src/utils/fraude.js` reúne lo que comparten los componentes: colores y
+  etiquetas de nivel (`alto`, `medio`, `bajo`), la frase corta de cada patrón,
+  las etiquetas de los umbrales y de la evidencia, `duracionLegible` y
+  `mensajeErrorFraude` (un `503 GRAFO_NO_DISPONIBLE` o la falta de conexión
+  se traducen a un mensaje para el administrador; el resto de los errores
+  muestran el `error` del backend). También exporta `ANILLOS`
+  (`"anillos_resenas"`), el valor de `?patron=` de la pestaña de la Entrega 2.
+- El botón "Actualizar" vuelve a pedir el resumen, los anillos y la pestaña
+  abierta.
+
 ## Build de producción
 
 ```

@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from sqlalchemy.exc import IntegrityError
 
 from ..extensions import db
+from ..grafo_fraude import sincronizar_direcciones_cuenta
 from ..models import Usuario, Direccion
 
 bp = Blueprint("direcciones", __name__)
@@ -25,6 +26,21 @@ _LONGITUDES = {
 _OBLIGATORIOS = ["direccion_linea1", "ciudad", "departamento_estado", "codigo_postal"]
 
 LIMITE_DIRECCIONES = 3
+
+
+def _sincronizar_grafo(id_usuario):
+    """
+    Espeja en Neo4j las direcciones del usuario como (:Cuenta)-[:ENVIA_A]->
+    (:Direccion) para el detector `cuentas_vinculadas` (ver fraude.py). Se
+    llama DESPUÉS del commit en Postgres, en mejor esfuerzo: si Neo4j falla,
+    la dirección ya quedó guardada y la respuesta no cambia (mismo criterio
+    que el espejo de reseñas). sincronizar_grafo_fraude.py repara el grafo.
+    """
+    try:
+        sincronizar_direcciones_cuenta(id_usuario)
+    except Exception as e:
+        db.session.rollback()
+        print(f"[direcciones] ADVERTENCIA: no se pudo sincronizar ENVIA_A del usuario {id_usuario} a Neo4j: {e}")
 
 
 def _direccion_a_dict(d):
@@ -131,8 +147,10 @@ def crear_direccion(id_usuario):
         nueva = Direccion(id_usuario=id_usuario, es_principal=es_principal, **valores)
         db.session.add(nueva)
         db.session.commit()
+        respuesta = _direccion_a_dict(nueva)
 
-        return jsonify(_direccion_a_dict(nueva)), 201
+        _sincronizar_grafo(id_usuario)
+        return jsonify(respuesta), 201
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"Error en base de datos: {str(e)}"}), 500
@@ -208,7 +226,10 @@ def actualizar_direccion(id_usuario, id_direccion):
         direccion.es_principal = es_principal
 
         db.session.commit()
-        return jsonify(_direccion_a_dict(direccion)), 200
+        respuesta = _direccion_a_dict(direccion)
+
+        _sincronizar_grafo(id_usuario)
+        return jsonify(respuesta), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"Error en base de datos: {str(e)}"}), 500
@@ -244,6 +265,8 @@ def eliminar_direccion(id_usuario, id_direccion):
                 siguiente.es_principal = True
 
         db.session.commit()
+
+        _sincronizar_grafo(id_usuario)
         return jsonify({"mensaje": "Dirección eliminada"}), 200
     except IntegrityError:
         db.session.rollback()

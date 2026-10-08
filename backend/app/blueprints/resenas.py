@@ -5,6 +5,7 @@ from pymongo import DESCENDING
 from pymongo.errors import DuplicateKeyError
 
 from ..extensions import col_productos, col_resenas, db, neo4j_driver, ZONA_GUATEMALA
+from ..grafo_fraude import compra_verificada as _compra_verificada
 from ..models import LineaPedido, Pedido
 
 bp = Blueprint("resenas", __name__)
@@ -34,12 +35,21 @@ def _es_entero(valor):
     return isinstance(valor, int) and not isinstance(valor, bool)
 
 
-def _sincronizar_neo4j(*, id_usuario, nombre, rol, producto_id, nombre_producto, sku, calificacion, fecha, id_resena):
+def _sincronizar_neo4j(*, id_usuario, nombre, rol, producto_id, nombre_producto, sku, calificacion, fecha,
+                      id_resena, compra_verificada, id_vendedor, nombre_vendedor):
     """
     Espeja la reseña recién creada en Mongo como nodos/relación en Neo4j.
     Se llama DESPUÉS de que la reseña ya está confirmada en Mongo; si esto
     falla no se revierte nada (ver comentario del módulo) -- el caller debe
     capturar la excepción.
+
+    Detección de fraude ampliada: además deja en el grafo
+    `CALIFICO.compra_verificada` (lo usan casi todos los detectores de
+    fraude.py para distinguir reseñas sin compra verificada) y,
+    si el producto tiene vendedor en Mongo, el nodo (:Vendedor), la relación
+    (:Producto)-[:VENDIDO_POR]->(:Vendedor) y `Producto.id_vendedor`. Todo va
+    en una sola transacción de Neo4j: o queda la reseña completa en el grafo
+    o no queda nada.
     """
     query = """
         MERGE (c:Cuenta {id_usuario: $id_usuario})
@@ -47,21 +57,39 @@ def _sincronizar_neo4j(*, id_usuario, nombre, rol, producto_id, nombre_producto,
         MERGE (p:Producto {id_producto: $producto_id})
           SET p.nombre = $nombre_producto, p.sku = $sku
         MERGE (c)-[r:CALIFICO]->(p)
-          SET r.calificacion = $calificacion, r.fecha = $fecha, r.id_resena = $id_resena
+          SET r.calificacion = $calificacion, r.fecha = $fecha, r.id_resena = $id_resena,
+              r.compra_verificada = $compra_verificada
+    """
+    query_vendedor = """
+        MATCH (p:Producto {id_producto: $producto_id})
+        MERGE (v:Vendedor {id_vendedor: $id_vendedor})
+          SET v.nombre = $nombre_vendedor
+        SET p.id_vendedor = $id_vendedor
+        MERGE (p)-[:VENDIDO_POR]->(v)
     """
     with neo4j_driver.session() as session:
-        session.run(
-            query,
-            id_usuario=id_usuario,
-            nombre=nombre,
-            rol=rol,
-            producto_id=producto_id,
-            nombre_producto=nombre_producto,
-            sku=sku,
-            calificacion=calificacion,
-            fecha=fecha,
-            id_resena=id_resena,
-        )
+        with session.begin_transaction() as tx:
+            tx.run(
+                query,
+                id_usuario=id_usuario,
+                nombre=nombre,
+                rol=rol,
+                producto_id=producto_id,
+                nombre_producto=nombre_producto,
+                sku=sku,
+                calificacion=calificacion,
+                fecha=fecha,
+                id_resena=id_resena,
+                compra_verificada=compra_verificada,
+            ).consume()
+            if id_vendedor is not None:
+                tx.run(
+                    query_vendedor,
+                    producto_id=producto_id,
+                    id_vendedor=id_vendedor,
+                    nombre_vendedor=nombre_vendedor,
+                ).consume()
+            tx.commit()
 
 
 @bp.route("/api/resenas", methods=["POST"])
@@ -121,6 +149,18 @@ def crear_resena():
     resena["_id"] = str(resultado.inserted_id)
 
     try:
+        # compra_verificada: mismo criterio que el listado de reseñas (ver
+        # grafo_fraude.compra_verificada). Se consulta en Postgres aquí, dentro
+        # del mejor esfuerzo: si Postgres o Neo4j fallan, la reseña de Mongo
+        # sigue en pie.
+        try:
+            verificada = _compra_verificada(id_usuario, producto.get("id_sql_origen"))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            raise
+        vendedor = producto.get("vendedor") or {}
+        id_vendedor = vendedor.get("id_vendedor")
         _sincronizar_neo4j(
             id_usuario=id_usuario,
             nombre=nombre_autor,
@@ -131,6 +171,9 @@ def crear_resena():
             calificacion=calificacion,
             fecha=now.isoformat(),
             id_resena=resena["_id"],
+            compra_verificada=verificada,
+            id_vendedor=int(id_vendedor) if id_vendedor is not None else None,
+            nombre_vendedor=vendedor.get("nombre_comercial"),
         )
     except Exception as e:
         # La reseña YA está confirmada en Mongo -- no se revierte. Solo se

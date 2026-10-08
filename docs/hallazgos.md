@@ -8,7 +8,26 @@ Este archivo registra los errores, pendientes y discrepancias que aparecen al pr
 
 **Cómo se cierra una entrada:** no se borra. Se cambia el estado a `corregido en <commit o archivo>` (o `descartado (motivo)`) y se completa "Corrección" con lo que se cambió. Si el hallazgo revela una limitación que se decidió aceptar, se agrega también a "Limitaciones conocidas" del [`README.md`](../README.md).
 
-Los números de línea de las causas de H-001 a H-009 se refieren al código del commit `785789d` (2026-10-06). Los de H-010 a H-015, y los de las correcciones, se refieren al árbol de trabajo del 2026-10-06 (correcciones todavía sin commit). Los de H-016 en adelante, al árbol de trabajo del 2026-10-07 (sobre el commit `06994dd`, con cambios sin commit).
+Los números de línea de las causas de H-001 a H-009 se refieren al código del commit `785789d` (2026-10-06). Los de H-010 a H-015, y los de las correcciones, se refieren al árbol de trabajo del 2026-10-06 (correcciones todavía sin commit). Los de H-016 en adelante, al árbol de trabajo del 2026-10-07 (sobre el commit `06994dd`, con cambios sin commit). Los de H-019 en adelante (detección de fraude ampliada), al árbol de trabajo del 2026-10-07 sobre el commit `4aabb9c`, con cambios sin commit.
+
+## Verificación del fraude ampliado (2026-10-07)
+
+Verificación de la detección de fraude ampliada ([`deteccion-fraude-ampliada.md`](deteccion-fraude-ampliada.md)) sobre el árbol de trabajo del 2026-10-07 (sin commit), con la semilla `database/migrations/sembrar_fraude_ampliado.py` cargada:
+
+- **Agente de backend**: `python backend/scripts/prueba_fraude_ampliado.py` 59/59 PASS (bloques F1 a F8: positivos, controles, lo que agregan los patrones nuevos frente a la consulta de la Entrega 2, `GET /api/fraude/alertas` intacto, errores, `/resumen`, y sincronización de reseñas y direcciones con Neo4j). Salida real de una corrida del 2026-10-07 en [`evidencia/prueba_fraude_ampliado.txt`](evidencia/prueba_fraude_ampliado.txt).
+- **Agente de base de datos**: el ruido legítimo de `sembrar_resenas_fraude.py` no genera ninguna alerta de los 4 patrones con los umbrales por defecto (0 alertas). (Que cada escenario de control de la semilla nueva quede por debajo de su umbral lo comprueba el bloque F2 de la prueba automática.)
+- **Agente de pruebas, prueba manual parcial**: una dirección escrita con distintas mayúsculas y espacios en cuentas diferentes llega al mismo nodo `(:Direccion)` (misma clave normalizada), y `cuentas_vinculadas` detecta esas cuentas. Esa pasada se interrumpió antes de terminar. Sus datos se limpiaron; quedaron los nodos `Producto` PROD-0113 y PROD-0168 y el `Vendedor` 51 sin relaciones, que también se borraron (no afectaban ninguna alerta).
+- **Estado del grafo consultado por el agente de documentación** (Neo4j, 2026-10-07): las 151 reseñas de MongoDB tienen su `CALIFICO`, todas con `compra_verificada`; hay 28 nodos `Vendedor`, 63 `VENDIDO_POR` (uno por producto) y 14 nodos `Direccion` con 17 `ENVIA_A`. Las tres variantes de "13 Calle 4-56 Zona 10" de la semilla quedan en un solo nodo, con clave `13 calle 4-56 zona 10|guatemala|01010` (cuentas 81, 82 y 83). Constraints: `cuenta_id`, `producto_id`, `vendedor_id` y `direccion_clave`.
+- **Verificación final del agente de pruebas (2026-10-07)**:
+  - `python backend/scripts/prueba_fraude_ampliado.py`: 59/59 PASS.
+  - API de los 4 patrones: `/patrones` los lista en orden; cada alerta tiene la forma esperada; `404` para tipos que no existen (`anillo_resenas`, `rafaga_producto`); `400` con un parámetro inválido; `403` sin rol de administrador.
+  - `GET /api/fraude/resumen`: `por_tipo` = `cuenta_rafaga` 1, `grupo_coordinado` 4, `sesgo_vendedor_sin_compra` 6, `cuentas_vinculadas` 1; 12 alertas y 23 cuentas de riesgo.
+  - `GET /api/fraude/alertas` (Entrega 2): `total` 5 (los 4 tríos del anillo de la semilla, más el de la prueba manual de H-021). El diff de `backend/app/blueprints/fraude.py` no borra ninguna línea.
+  - Prueba propia: 5 reseñas sin compra de la cuenta demo 69, en productos distintos, hacen aparecer la cuenta en `cuenta_rafaga` con puntaje 100 y nivel alto, y en `/resumen`. Después se limpió todo: reseñas, `CALIFICO` y los nodos `Cuenta`, `Producto` y `Vendedor` que se crearon.
+  - La semilla original (`sembrar_resenas_fraude.py`) y `database/neo4j/01_constraints.cypher` no cambiaron.
+  - `npm run build` (en `frontend/app/`): OK (80 módulos). Las 6 pestañas del panel `/admin/fraude` se revisaron leyendo el código contra las respuestas de la API, sin navegador.
+  - Regresión: `python backend/scripts/prueba_buscador.py` 18/18 PASS; `GET /api/resenas/PROD-0001` responde `200`.
+  - Hallazgo nuevo: H-024 (corregido el mismo día).
 
 ## Verificación del 2026-10-07 (ofertas flash, ventas y carrito)
 
@@ -42,6 +61,60 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - Verificación general de la API: 158 casos, 155 OK. Los 3 restantes son hallazgos menores (H-002, H-003 y H-004). Hubo además 1 falso positivo: `DELETE /api/carrito/<id_usuario>/items/<id_producto>` con un producto que no está en el carrito responde `200` a propósito, porque la operación es idempotente (`backend/app/blueprints/carrito.py:202-216`).
 - Consistencia entre motores: 1015 productos en PostgreSQL, en MongoDB y en el alias `productos` de Elasticsearch. Outbox: 18 eventos procesados, 0 pendientes y 0 fallidos.
 - `npm run build` (en `frontend/app/`): OK.
+
+## H-024 — "Ajustar sensibilidad" acepta un porcentaje mayor que 100 (2026-10-07)
+- **Estado:** corregido en el árbol de trabajo (`frontend/app/src/components/admin/AlertasPatron.vue`; 2026-10-07, sin commit)
+- **Severidad:** menor
+- **Área:** frontend
+- **Síntoma:** en la pestaña "Cuenta en ráfaga" del panel `/admin/fraude`, el campo `min_pct_sin_compra` de "Ajustar sensibilidad" deja escribir un valor mayor que 100. El backend responde `400` ("min_pct_sin_compra debe ser un entero entre 1 y 100") y el panel muestra un error. El campo debería limitarse a 1-100 antes de enviar.
+- **Cómo reproducirlo:** entrar como `admin@tiendaya.com` a `/admin/fraude?patron=cuenta_rafaga`, escribir `150` en "Mínimo % de reseñas sin compra" y aplicar. Por la API: `curl "http://127.0.0.1:8000/api/fraude/alertas/cuenta_rafaga?rol_solicitante=administrador&min_pct_sin_compra=150"` responde `400`.
+- **Causa:** el formulario de `AlertasPatron.vue` solo validaba que el valor fuera un entero positivo. El tope de 100 está solo en el backend (`_MAXIMOS_PARAMETRO` en `backend/app/blueprints/fraude.py`).
+- **Corrección:** `AlertasPatron.vue:23-28`: `esPorcentaje` reconoce como porcentaje todo parámetro que tenga `pct` como palabra en el nombre (por ejemplo `min_pct_sin_compra`), y `valorValido` exige para esos un entero entre 1 y 100 (el resto, un entero positivo). El campo tiene `max="100"` (línea 96) y, si el valor no es válido, muestra "Debe ser un entero entre 1 y 100" (línea 107); si es válido, la ayuda dice "Entre 1 y 100 · Por defecto 80" (línea 109). Verificado con `npm run build`; falta la prueba visual en el navegador.
+
+## H-023 — Comentarios de los scripts del fraude ampliado con nombres de patrones viejos (2026-10-07)
+- **Estado:** corregido en el árbol de trabajo (2026-10-07)
+- **Severidad:** documentación
+- **Área:** database
+- **Síntoma:** el docstring de `database/migrations/sincronizar_grafo_fraude.py` dice que el grafo ampliado lo usan los patrones "promotor_sin_compra, ataque_competencia, rafaga_producto y cuentas_vinculadas". Los patrones que existen son `cuenta_rafaga`, `grupo_coordinado`, `sesgo_vendedor_sin_compra` y `cuentas_vinculadas`; los otros tres se eliminaron durante el desarrollo (la prueba verifica que respondan `404`). Además, `database/neo4j/02_fraude_ampliado.cypher` y ese mismo docstring dicen "(Entrega 3)", aunque el cambio es posterior a la Entrega 3.
+- **Cómo reproducirlo:** leer las primeras líneas de `database/migrations/sincronizar_grafo_fraude.py` (párrafo "Propósito") y la línea 1 de `database/neo4j/02_fraude_ampliado.cypher`.
+- **Causa:** comentarios escritos con una versión intermedia del diseño.
+- **Corrección:** el docstring de `sincronizar_grafo_fraude.py` (líneas 6-7) nombra ahora los patrones vigentes (`cuenta_rafaga`, `grupo_coordinado`, `sesgo_vendedor_sin_compra` y `cuentas_vinculadas`), y la línea 2 de ese archivo y la línea 1 de `02_fraude_ampliado.cypher` dicen "(después de la Entrega 3, 2026-10-07)". No cambia el comportamiento. **Verificado:** `grep -rn "promotor_sin_compra\|ataque_competencia\|rafaga_producto" database/` no encuentra nada y el script compila (`py_compile`).
+
+## H-022 — 15 compradores `@fraude-demo` sin uso en bases que corrieron una versión intermedia de la semilla (2026-10-07)
+- **Estado:** descartado (inofensivo: son compradores sin reseñas, direcciones ni pedidos; no se borran usuarios)
+- **Severidad:** menor
+- **Área:** database
+- **Síntoma:** en una base donde se corrió una versión intermedia de `database/migrations/sembrar_fraude_ampliado.py`, que sembraba 4 escenarios más, quedan 15 compradores `@fraude-demo.tiendaya.gt` que ninguna corrida actual usa. En la base local son los ids 66 a 80 (de `oscar.monterroso@fraude-demo.tiendaya.gt` a `ingrid.mazariegos@fraude-demo.tiendaya.gt`). Las 24 cuentas que sí usa la semilla son las de `CUENTAS_POR_ESCENARIO`.
+- **Cómo reproducirlo:** `venv/Scripts/python -c "import psycopg2, os; from dotenv import load_dotenv; load_dotenv(); c=psycopg2.connect(host=os.getenv('PG_HOST'), port=os.getenv('PG_PORT'), dbname=os.getenv('PG_DBNAME'), user=os.getenv('PG_USER'), password=os.getenv('PG_PASSWORD')); cur=c.cursor(); cur.execute(\"SELECT count(*) FROM usuarios WHERE email LIKE '%@fraude-demo.tiendaya.gt'\"); print(cur.fetchone())"` da 39 en esa base (24 en una base que solo corrió la versión final). Comprobado el 2026-10-07: los ids 66 a 80 no tienen direcciones ni pedidos en PostgreSQL ni reseñas en MongoDB.
+- **Causa:** la semilla crea los usuarios con `ON CONFLICT (email) DO NOTHING` y, a propósito, nunca borra usuarios (solo limpia sus reseñas, direcciones marcadas y relaciones). Está explicado en el docstring del script.
+- **Corrección:** ninguna. Como no tienen reseñas, no aparecen en ninguna alerta. Si se quieren quitar, se pueden borrar a mano de `usuarios` (no tienen filas que los referencien).
+
+## H-021 — Las reseñas "[prueba fraude]" del 2026-09-23 siguen en la base y aparecen como fraude (2026-10-07)
+- **Estado:** descartado (no es un falso positivo: son reseñas de una prueba manual de fraude que siguen en la base)
+- **Severidad:** documentación
+- **Área:** database
+- **Síntoma:** las cuentas 16 (Paola Morales), 18 (Daniela Ortiz), 20 (Gabriela Ramos) y 21 (Andres Vasquez) aparecen en `grupo_coordinado`, y 16, 18 y 21 forman un trío en `GET /api/fraude/alertas` (por eso esa consulta da 5 alertas y no las 4 del informe de la Entrega 2). Parecen falsos positivos, pero no lo son: son las 11 reseñas de 5 estrellas sobre PROD-0107, PROD-0108 y PROD-0109 de la prueba manual del 2026-09-23 ([guía de prueba de fraude](guia-prueba-fraude.md), sección 3), escritas a segundos de distancia, con el texto `[prueba fraude]` (o `[prueba fraude - control]` en la cuenta 20).
+- **Cómo reproducirlo:** en `mongosh`, `db.resenas.find({ texto: /\[prueba fraude/ }).count()` da 11; `curl "http://127.0.0.1:8000/api/fraude/resumen?rol_solicitante=administrador"` incluye las cuentas 16, 18, 20 y 21.
+- **Causa:** la prueba manual no se limpió después. La cuenta 20 era el control de esa prueba (comparte solo 2 productos y por eso no forma trío en la consulta de la Entrega 2), pero sí cumple el umbral de `grupo_coordinado` (3 cuentas, 2 productos en común, 6 horas): el patrón nuevo es más sensible a propósito.
+- **Corrección:** ninguna en el código. Para quitarlas, seguir la sección 7 de la [guía de prueba de fraude](guia-prueba-fraude.md) (borra las reseñas en MongoDB y sus relaciones en Neo4j). Si se dejan, al leer el panel hay que tener en cuenta que son datos de prueba.
+
+## H-020 — Carrera posible al sincronizar direcciones con Neo4j (2026-10-07)
+- **Estado:** descartado (limitación aceptada: sincronización en mejor esfuerzo, sin 2PC; agregada a "Limitaciones conocidas" del [`README.md`](../README.md))
+- **Severidad:** menor
+- **Área:** backend
+- **Síntoma:** si dos cambios de direcciones del mismo usuario (crear, editar o borrar) se confirman casi a la vez en PostgreSQL, las relaciones `ENVIA_A` de Neo4j pueden quedar con el estado anterior. Deberían reflejar siempre las direcciones actuales de PostgreSQL.
+- **Cómo reproducirlo:** no se reprodujo; se deduce del código. Haría falta enviar dos `PUT /api/usuarios/<id_usuario>/direcciones/<id_direccion>` del mismo usuario casi al mismo tiempo, de forma que la sincronización que leyó primero escriba en Neo4j después que la otra.
+- **Causa:** `sincronizar_direcciones_cuenta` (`backend/app/grafo_fraude.py`) lee las direcciones actuales de PostgreSQL después del commit y deja `ENVIA_A` iguales a esa lectura. No hay bloqueo entre la lectura y la escritura en Neo4j. Está documentado en el docstring de la función.
+- **Corrección:** ninguna. Se acepta porque un usuario casi nunca edita dos direcciones a la vez, el efecto es solo sobre el detector `cuentas_vinculadas` (no sobre las direcciones ni el checkout) y se corrige solo con la próxima edición de direcciones de ese usuario o al correr `python database/migrations/sincronizar_grafo_fraude.py`, que es idempotente.
+
+## H-019 — El backend se cae al recargar en Windows con `OSError: [WinError 10038]` (2026-10-07)
+- **Estado:** abierto
+- **Severidad:** menor
+- **Área:** backend
+- **Síntoma:** con el backend en modo debug (`DEBUG = True` en `backend/main.py`), al guardar un archivo `.py` del backend, el recargador de Flask (Werkzeug) no reinicia el servidor: el proceso termina con `OSError: [WinError 10038]` en `select.select` y la API deja de responder. Debería recargarse y seguir atendiendo. Se observó varias veces en Windows durante el desarrollo de la detección de fraude ampliada.
+- **Cómo reproducirlo:** en Windows, `python backend/main.py`, editar y guardar cualquier archivo de `backend/app/` y luego `curl http://127.0.0.1:8000/api/fraude/patrones?rol_solicitante=administrador` (no responde). No se reprodujo en macOS/Linux.
+- **Causa:** no confirmada. El error sale del bucle del servidor de Werkzeug (`select.select` sobre el socket del servidor) al reiniciarse el proceso en Windows. No es un error del código de TiendaYa.
+- **Corrección:** por ahora, relanzar `python backend/main.py` a mano. Si se vuelve molesto, se puede proponer al agente de backend arrancar sin recargador (`use_reloader=False`) en Windows, a cambio de reiniciar a mano después de cada cambio.
 
 ## H-018 — En los resultados de búsqueda, la etiqueta de oferta solo marca una oferta (2026-10-07)
 - **Estado:** corregido en el árbol de trabajo (`frontend/app/src/components/publico/NavPublica.vue`; 2026-10-07, sin commit)

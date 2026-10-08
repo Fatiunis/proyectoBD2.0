@@ -1,88 +1,220 @@
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, computed, nextTick, onMounted } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { apiFetch } from "../../services/api";
 import { useSesion } from "../../composables/useSesion";
-import { useToast } from "../../composables/useToast";
+import ResumenFraude from "./ResumenFraude.vue";
+import AlertasPatron from "./AlertasPatron.vue";
+import AnillosResenas from "./AnillosResenas.vue";
+import { mensajeErrorFraude, ANILLOS } from "../../utils/fraude";
+
+const RESUMEN = "resumen";
 
 const { sesion } = useSesion();
-const { toast } = useToast();
+const route = useRoute();
+const router = useRouter();
 
-const alertas = ref([]);
-const cargando = ref(true);
-const filaExpandida = ref(null);
+const patrones = ref([]);
+const cargandoPatrones = ref(true);
+const errorPatrones = ref("");
+const resumen = ref(null);
+const cargandoResumen = ref(true);
+const errorResumen = ref("");
+const anillos = ref([]);
+const totalAnillos = ref(0);
+const cargandoAnillos = ref(true);
+const errorAnillos = ref("");
+const recarga = ref(0);
+const listaPestanas = ref(null);
 
-function nombresCuentas(alerta) {
-  return alerta.cuentas_involucradas.map((c) => c.nombre).join(", ");
+const pestanas = computed(() => [
+  { tipo: RESUMEN, nombre: "Resumen" },
+  { tipo: ANILLOS, nombre: "Anillos de reseñas (Entrega 2)" },
+  ...patrones.value,
+]);
+const tipoActivo = computed(() => {
+  const pedido = route.query.patron;
+  return pestanas.value.some((p) => p.tipo === pedido) ? pedido : RESUMEN;
+});
+const patronActivo = computed(() => patrones.value.find((p) => p.tipo === tipoActivo.value));
+const estadoAnillos = computed(() => ({ total: totalAnillos.value, cargando: cargandoAnillos.value, error: errorAnillos.value }));
+
+function contador(tipo) {
+  if (tipo === RESUMEN) return null;
+  if (tipo === ANILLOS) return cargandoAnillos.value || errorAnillos.value ? null : totalAnillos.value;
+  if (cargandoResumen.value || errorResumen.value) return null;
+  return resumen.value?.por_tipo?.[tipo] ?? 0;
 }
 
-function productosUnicos(alerta) {
-  return [...new Set(alerta.productos_compartidos)];
-}
-
-function alternarDetalle(index) {
-  filaExpandida.value = filaExpandida.value === index ? null : index;
-}
-
-async function cargarAlertas() {
-  cargando.value = true;
-  const { ok, data } = await apiFetch(`/fraude/alertas?rol_solicitante=${sesion.value.rol}`);
-  cargando.value = false;
-
+async function cargarPatrones() {
+  cargandoPatrones.value = true;
+  errorPatrones.value = "";
+  const { ok, status, data } = await apiFetch(`/fraude/patrones?rol_solicitante=${encodeURIComponent(sesion.value.rol)}`);
+  cargandoPatrones.value = false;
   if (!ok) {
-    toast(data?.error || "No se pudieron cargar las alertas de fraude.", "error");
+    errorPatrones.value = mensajeErrorFraude(status, data, "No se pudo cargar la lista de patrones de fraude.");
     return;
   }
-  alertas.value = data.alertas || [];
+  patrones.value = data.patrones || [];
 }
 
-onMounted(cargarAlertas);
+async function cargarResumen() {
+  cargandoResumen.value = true;
+  errorResumen.value = "";
+  const { ok, status, data } = await apiFetch(`/fraude/resumen?rol_solicitante=${encodeURIComponent(sesion.value.rol)}`);
+  cargandoResumen.value = false;
+  if (!ok) {
+    errorResumen.value = mensajeErrorFraude(status, data, "No se pudo cargar el resumen de fraude.");
+    return;
+  }
+  resumen.value = data;
+}
+
+async function cargarAnillos() {
+  cargandoAnillos.value = true;
+  errorAnillos.value = "";
+  const { ok, status, data } = await apiFetch(`/fraude/alertas?rol_solicitante=${encodeURIComponent(sesion.value.rol)}`);
+  cargandoAnillos.value = false;
+  if (!ok) {
+    errorAnillos.value = mensajeErrorFraude(status, data, "No se pudieron cargar los anillos de reseñas.");
+    return;
+  }
+  anillos.value = data.alertas || [];
+  totalAnillos.value = data.total ?? anillos.value.length;
+}
+
+async function seleccionar(tipo, { enfocar = false } = {}) {
+  if (!pestanas.value.some((p) => p.tipo === tipo)) return;
+  const query = { ...route.query };
+  if (tipo === RESUMEN) delete query.patron;
+  else query.patron = tipo;
+  await router.replace({ query });
+  if (enfocar) {
+    await nextTick();
+    listaPestanas.value?.querySelector(`#pestana-${tipo}`)?.focus();
+  }
+}
+
+function moverConTeclado(evento) {
+  const indice = pestanas.value.findIndex((p) => p.tipo === tipoActivo.value);
+  const ultimo = pestanas.value.length - 1;
+  const destino = { ArrowRight: indice + 1, ArrowLeft: indice - 1, Home: 0, End: ultimo }[evento.key];
+  if (destino === undefined) return;
+  evento.preventDefault();
+  const envuelto = destino > ultimo ? 0 : destino < 0 ? ultimo : destino;
+  seleccionar(pestanas.value[envuelto].tipo, { enfocar: true });
+}
+
+function actualizarTodo() {
+  if (errorPatrones.value) cargarPatrones();
+  cargarResumen();
+  cargarAnillos();
+  recarga.value++;
+}
+
+onMounted(() => {
+  cargarPatrones();
+  cargarResumen();
+  cargarAnillos();
+});
 </script>
 
 <template>
   <div>
-    <h2 class="text-2xl font-extrabold text-neutral-950 tracking-tight mb-1">Alertas de fraude</h2>
-    <p class="text-sm text-neutral-500 mb-6">Anillos de cuentas con calificaciones cruzadas coordinadas (fuente: Neo4j)</p>
-
-    <div class="bg-white p-5 rounded-2xl border border-neutral-200 mb-6 max-w-xs">
-      <p class="text-[11px] uppercase tracking-wide text-neutral-400 font-bold mb-1">Total de alertas</p>
-      <p class="text-2xl font-extrabold text-neutral-950">{{ alertas.length }}</p>
-    </div>
-
-    <div class="bg-white p-5 rounded-2xl border border-neutral-200">
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="text-left text-[11px] uppercase tracking-wide text-neutral-400 border-b border-neutral-100">
-              <th class="p-2.5">Cuentas involucradas</th>
-              <th class="p-2.5">Productos compartidos</th>
-              <th class="p-2.5 text-right">Score de anomalía</th>
-              <th class="p-2.5"></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="!cargando && alertas.length === 0">
-              <td colspan="4" class="p-6 text-center text-sm text-neutral-400">No se detectaron alertas de fraude con estos parámetros.</td>
-            </tr>
-            <template v-for="(a, index) in alertas" :key="index">
-              <tr class="border-b border-neutral-100 hover:bg-neutral-50/80 transition">
-                <td class="p-2.5 font-medium text-neutral-950">{{ nombresCuentas(a) }}</td>
-                <td class="p-2.5 text-neutral-600 font-mono text-xs">{{ productosUnicos(a).join(", ") }}</td>
-                <td class="p-2.5 text-right font-semibold text-neutral-950">{{ a.score_anomalia }}</td>
-                <td class="p-2.5 text-right">
-                  <button @click="alternarDetalle(index)" class="px-2.5 py-1 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 text-xs font-semibold rounded-full transition">
-                    {{ filaExpandida === index ? "Ocultar" : "Ver detalle" }}
-                  </button>
-                </td>
-              </tr>
-              <tr v-if="filaExpandida === index" class="border-b border-neutral-100 bg-neutral-50">
-                <td colspan="4" class="p-3.5">
-                  <pre class="text-xs bg-neutral-950 text-neutral-300 p-3 rounded-lg overflow-x-auto">{{ JSON.stringify(a, null, 2) }}</pre>
-                </td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
+    <div class="flex flex-wrap justify-between items-start gap-4 mb-5">
+      <div>
+        <h2 class="text-2xl font-extrabold text-neutral-950 tracking-tight mb-1">Alertas de fraude</h2>
+        <p class="text-sm text-neutral-500 max-w-3xl">Reseñas sospechosas detectadas en el grafo de cuentas, productos, tiendas y direcciones (Neo4j).</p>
       </div>
+      <button
+        @click="actualizarTodo"
+        class="px-4 py-2 border border-neutral-200 hover:border-neutral-400 text-neutral-700 font-semibold rounded-full text-sm transition"
+      >Actualizar</button>
     </div>
+
+    <div
+      v-if="errorPatrones"
+      role="alert"
+      class="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+    >
+      <span class="mt-0.5 w-5 h-5 shrink-0 rounded-full bg-red-600 text-white text-xs font-bold flex items-center justify-center" aria-hidden="true">!</span>
+      <p class="flex-1">{{ errorPatrones }}</p>
+      <button @click="cargarPatrones" class="shrink-0 text-xs font-semibold underline underline-offset-2 hover:text-red-600">Reintentar</button>
+    </div>
+
+    <p v-else-if="cargandoPatrones" class="text-sm text-neutral-500" aria-live="polite">Cargando...</p>
+
+    <template v-else>
+      <div
+        ref="listaPestanas"
+        role="tablist"
+        aria-label="Tipos de fraude"
+        class="flex gap-1 overflow-x-auto border-b border-neutral-200 mb-6"
+        @keydown="moverConTeclado"
+      >
+        <button
+          v-for="p in pestanas"
+          :key="p.tipo"
+          :id="`pestana-${p.tipo}`"
+          role="tab"
+          type="button"
+          :aria-selected="tipoActivo === p.tipo"
+          :aria-controls="`panel-${p.tipo}`"
+          :tabindex="tipoActivo === p.tipo ? 0 : -1"
+          @click="seleccionar(p.tipo)"
+          :class="[
+            '-mb-px shrink-0 inline-flex items-center gap-2 px-4 py-2.5 border-b-2 text-sm font-semibold whitespace-nowrap transition focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-600/50 rounded-t-lg',
+            tipoActivo === p.tipo ? 'border-neutral-950 text-neutral-950' : 'border-transparent text-neutral-500 hover:text-neutral-800 hover:border-neutral-300',
+          ]"
+        >
+          {{ p.nombre }}
+          <span
+            v-if="contador(p.tipo) !== null"
+            :class="[
+              'min-w-[1.5rem] px-1.5 py-0.5 rounded-full text-[11px] font-bold text-center',
+              contador(p.tipo) > 0 ? 'bg-red-100 text-red-700' : 'bg-neutral-100 text-neutral-500',
+            ]"
+          >
+            {{ contador(p.tipo) }}<span class="sr-only"> alertas</span>
+          </span>
+        </button>
+      </div>
+
+      <div
+        :id="`panel-${tipoActivo}`"
+        role="tabpanel"
+        :aria-labelledby="`pestana-${tipoActivo}`"
+        tabindex="0"
+        class="focus:outline-none"
+      >
+        <KeepAlive>
+          <ResumenFraude
+            v-if="tipoActivo === RESUMEN"
+            :key="RESUMEN"
+            :patrones="patrones"
+            :resumen="resumen"
+            :cargando="cargandoResumen"
+            :error="errorResumen"
+            :anillos="estadoAnillos"
+            @seleccionar="seleccionar"
+            @reintentar="cargarResumen"
+          />
+          <AnillosResenas
+            v-else-if="tipoActivo === ANILLOS"
+            :key="ANILLOS"
+            :alertas="anillos"
+            :cargando="cargandoAnillos"
+            :error="errorAnillos"
+            @reintentar="cargarAnillos"
+          />
+          <AlertasPatron v-else-if="patronActivo" :key="patronActivo.tipo" :patron="patronActivo" :recarga="recarga" />
+        </KeepAlive>
+
+        <p v-if="patronActivo?.tipo === 'grupo_coordinado'" class="mt-6 text-xs text-neutral-500">
+          La detección original de anillos de 3 cuentas sigue en su propia pestaña:
+          <button type="button" @click="seleccionar(ANILLOS)" class="font-semibold text-accent-700 underline underline-offset-2">Anillos de reseñas (Entrega 2)</button>.
+        </p>
+      </div>
+    </template>
   </div>
 </template>

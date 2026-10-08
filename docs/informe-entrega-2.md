@@ -149,6 +149,8 @@ Datos sembrados con `database/migrations/sembrar_resenas_fraude.py`: 66 reseñas
 
 El panel está en `/admin/fraude` y solo lo ve un administrador.
 
+> **Actualización posterior (2026-10-07).** Después de esta entrega se agregaron cuatro patrones de fraude nuevos sobre el mismo grafo. Lo descrito en esta sección no cambió: `GET /api/fraude/alertas` y la semilla siguen iguales, y la consulta está en la pestaña "Anillos de reseñas" del panel. Detalle en [`deteccion-fraude-ampliada.md`](deteccion-fraude-ampliada.md).
+
 ---
 
 ## 7. Arquitectura actualizada

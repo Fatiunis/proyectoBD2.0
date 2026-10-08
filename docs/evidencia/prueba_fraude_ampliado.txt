@@ -1,0 +1,83 @@
+Corrida real del 2026-10-07 - comando: venv\Scripts\python.exe backend/scripts/prueba_fraude_ampliado.py (backend en http://127.0.0.1:8000, semilla sembrar_fraude_ampliado.py cargada)
+
+==========================================================================
+EVIDENCIA DE LA DETECCIÓN DE FRAUDE AMPLIADA (NEO4J)
+==========================================================================
+Escenarios en la semilla: {'cuenta_rafaga': ([145], ['PROD-0222', 'PROD-0224', 'PROD-0226', 'PROD-0228', 'PROD-0782', 'PROD-0783', 'PROD-0853', 'PROD-0863']), 'cuenta_rafaga_control': ([146], ['PROD-0167', 'PROD-0169', 'PROD-0171', 'PROD-0176', 'PROD-0253', 'PROD-0255', 'PROD-0256', 'PROD-0259']), 'detractor': ([130], ['PROD-0314', 'PROD-0329', 'PROD-0333', 'PROD-0358']), 'detractor_control': ([131], ['PROD-0336', 'PROD-0352']), 'grupo_control': ([141, 142, 143, 144], ['PROD-0859', 'PROD-0879']), 'grupo_negativo': ([132, 133, 134, 135, 136], ['PROD-0218', 'PROD-0252', 'PROD-0951']), 'grupo_positivo': ([137, 138, 139, 140], ['PROD-0217', 'PROD-0221']), 'promotor': ([64], ['PROD-0303', 'PROD-0313', 'PROD-0320', 'PROD-0327']), 'promotor_control': ([65], ['PROD-0307', 'PROD-0311']), 'vinculadas': ([81, 82, 83], ['PROD-0023', 'PROD-0029', 'PROD-0033']), 'vinculadas_control': ([84, 85], ['PROD-0111', 'PROD-0121', 'PROD-0454', 'PROD-0458'])}
+
+[F1/F2] Escenarios de la semilla: positivos detectados, controles no
+   [OK  ] La semilla fraude_ampliado tiene los 11 escenarios
+   [OK  ] promotor aparece en sesgo_vendedor_sin_compra con signo positivo  (score 90 alto)
+   [OK  ] promotor_control (solo 2 reseñas) NO aparece en sesgo_vendedor_sin_compra
+   [OK  ] detractor aparece en sesgo_vendedor_sin_compra con signo negativo  (score 90 alto)
+   [OK  ] detractor_control (solo 2 reseñas) NO aparece en sesgo_vendedor_sin_compra
+   [OK  ] grupo_negativo aparece en grupo_coordinado como UN grupo de 5 (negativo)  (score 100 alto, tamaño 5)
+   [OK  ] grupo_positivo aparece en grupo_coordinado como UN grupo de 4 (positivo)  (score 100 alto, tamaño 4)
+   [OK  ] grupo_control (mismos productos, repartido en semanas) NO aparece en grupo_coordinado
+   [OK  ] cuenta_rafaga aparece en cuenta_rafaga  (score 96 alto, 8 reseñas en 39.0 min)
+   [OK  ] cuenta_rafaga_control (repartida en semanas) NO aparece en cuenta_rafaga
+   [OK  ] vinculadas (3 cuentas, misma dirección) aparece en cuentas_vinculadas  (score 90 alto, Guatemala)
+   [OK  ] vinculadas_control (familia, productos distintos) NO aparece en cuentas_vinculadas
+
+[F3] Lo que agregan los patrones nuevos sobre el anillo original (GET /api/fraude/alertas)
+   [OK  ] las cuentas vinculadas NO aparecen juntas en el anillo original (reseñas espaciadas > 6 h)
+   [OK  ] grupo_positivo NO aparece en el anillo original (comparte solo 2 productos)
+
+[F4] GET /api/fraude/alertas (Entrega 2) sin cambios
+   [OK  ] responde 200  (200)
+   [OK  ] mismo formato {alertas, total, parametros}
+   [OK  ] incluye los 4 tríos del anillo fuerte de la semilla original  (cuentas del anillo: [4, 5, 12, 13])
+   [OK  ] grupo_coordinado ve el anillo de la Entrega 2 (4 cuentas) como un solo grupo positivo  (score 97, tamaño 4)
+
+[F5] Contrato y errores
+   [OK  ] /fraude/patrones sin rol administrador -> 403  (403/403)
+   [OK  ] /fraude/alertas/grupo_coordinado sin rol administrador -> 403  (403/403)
+   [OK  ] /fraude/resumen sin rol administrador -> 403  (403/403)
+   [OK  ] tipo 'no_existe' -> 404 con error  (404)
+   [OK  ] tipo 'anillo_resenas' -> 404 con error  (404)
+   [OK  ] tipo 'ataque_competencia' -> 404 con error  (404)
+   [OK  ] tipo 'rafaga_producto' -> 404 con error  (404)
+   [OK  ] tipo 'promotor_sin_compra' -> 404 con error  (404)
+   [OK  ] min_resenas=abc -> 400  (400)
+   [OK  ] min_resenas=0 -> 400  (400)
+   [OK  ] min_resenas=-2 -> 400  (400)
+   [OK  ] min_resenas=1.5 -> 400  (400)
+   [OK  ] min_pct_sin_compra=0 -> 400  (400)
+   [OK  ] min_pct_sin_compra=101 -> 400  (400)
+   [OK  ] parámetros válidos se aplican y se devuelven (los omitidos con su default)
+   [OK  ] /patrones lista exactamente los 4 tipos, en orden, con parámetros por defecto
+   [OK  ] todas las alertas tienen la forma Alerta, score 0-100 coherente con nivel, orden desc
+
+[F6] Resumen por cuenta
+   [OK  ] responde 200  (200)
+   [OK  ] por_tipo trae los 4 tipos y total_alertas es su suma  ({'cuenta_rafaga': 1, 'cuentas_vinculadas': 1, 'grupo_coordinado': 4, 'sesgo_vendedor_sin_compra': 6})
+   [OK  ] cuentas de 'promotor' están en cuentas_riesgo con 'sesgo_vendedor_sin_compra' y nivel
+   [OK  ] cuentas de 'detractor' están en cuentas_riesgo con 'sesgo_vendedor_sin_compra' y nivel
+   [OK  ] cuentas de 'grupo_negativo' están en cuentas_riesgo con 'grupo_coordinado' y nivel
+   [OK  ] cuentas de 'grupo_positivo' están en cuentas_riesgo con 'grupo_coordinado' y nivel
+   [OK  ] cuentas de 'cuenta_rafaga' están en cuentas_riesgo con 'cuenta_rafaga' y nivel
+   [OK  ] cuentas de 'vinculadas' están en cuentas_riesgo con 'cuentas_vinculadas' y nivel
+   [OK  ] cuentas_riesgo solo menciona los 4 tipos y score_total está entre 0 y 100
+   [OK  ] cuentas_riesgo ordenado por score_total desc
+
+[F7] Reseña nueva por la API -> grafo completo
+   [OK  ] hay un par (comprador, producto) libre para la prueba
+   [OK  ] POST /api/resenas -> 201  (201)
+   [OK  ] GET /api/resenas/<producto> lista la reseña nueva  (200)
+   [OK  ] CALIFICO creado en Neo4j
+   [OK  ] CALIFICO.compra_verificada coincide con verificada_compra del listado  (grafo=True, listado=True)
+   [OK  ] Producto-[:VENDIDO_POR]->Vendedor y Producto.id_vendedor correctos  (vendedor 3 'Moda Urbana GT')
+   [OK  ] limpieza: la reseña temporal se borró de Mongo y Neo4j
+
+[F8] Direcciones -> ENVIA_A
+   [OK  ] hay un comprador con espacio para una dirección más
+   [OK  ] POST dirección -> 201  (201)
+   [OK  ] crear: ENVIA_A a la Direccion con clave normalizada  (prueba fraude 1791422958 zona 10|guatemala|01010)
+   [OK  ] PUT dirección -> 200  (200)
+   [OK  ] editar: quita la relación vieja (y el nodo sin otras cuentas) y crea la nueva  (viejo=0 nodos, nuevo=1 rel)
+   [OK  ] DELETE dirección -> 200  (200)
+   [OK  ] borrar: sin ENVIA_A ni nodo Direccion huérfano
+
+==========================================================================
+59/59 verificaciones OK
+RESULTADO: PASS
