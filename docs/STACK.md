@@ -430,8 +430,7 @@ frontend/app/
   `docs/estrategia-consistencia-checkout.md`, ADR-004, ADR-005 (NewSQL para
   pagos: no migrar) e `informe-entrega-3.md`.
 - 2026-10-06: **Correcciones tras la verificación de la Entrega 3** (registro
-  completo en [`hallazgos.md`](hallazgos.md); en el árbol de trabajo, sin
-  commit todavía). (1) **Historial**: `HistorialProducto.vue` vuelve a cargar
+  completo en [`hallazgos.md`](hallazgos.md); commit `06994dd`). (1) **Historial**: `HistorialProducto.vue` vuelve a cargar
   el selector de productos recorriendo todas las páginas de `GET
   /api/productos` (`por_pagina=100`, en paralelo según `total_paginas`) (H-001).
   `GET /api/historial` deja de devolver solo los 50 eventos más recientes
@@ -463,7 +462,7 @@ frontend/app/
   (el Historial pagina con los filtros aplicados) y H-015 (stock de PROD-0004
   y PROD-0014 ajustado desde PostgreSQL); queda abierto H-013.
 - 2026-10-07: **Ofertas flash visibles en el sitio y carrito sin expiración
-  por defecto** (en el árbol de trabajo, sin commit). (1) **Listados de
+  por defecto** (commit `4aabb9c`). (1) **Listados de
   ofertas**: hasta ahora una oferta solo se podía consultar por producto
   (`GET /api/ofertas/<producto_id>`), así que el comprador no tenía cómo
   enterarse de que existía. `ofertas.py` agrega `GET /api/ofertas` (público,
@@ -515,7 +514,7 @@ frontend/app/
   tras un `GET /api/carrito`. La oferta y el carrito de prueba se borraron
   después. Sin verificación visual en el navegador.
 - 2026-10-07 (más tarde): **decisiones del equipo y rediseño de las
-  ofertas en el catálogo** (en el árbol de trabajo, sin commit). (1)
+  ofertas en el catálogo** (commit `4aabb9c`). (1)
   **Carrito**: el equipo decidió mantener `CARRITO_TTL_SEGUNDOS=0` por
   defecto y se registró en `docs/decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md`,
   que reemplaza ese punto de la Decisión 1 de ADR-003 (ADR-003 lleva una

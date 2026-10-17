@@ -109,7 +109,7 @@ Qué se construyó, en concreto:
   - **Errores del buscador**: `GET /api/busqueda` responde `400 BUSQUEDA_NO_VALIDA` si Elasticsearch rechaza la consulta, y `400` si `precio_min`/`precio_max` no son números finitos (`nan`, `inf`). El `503 BUSCADOR_NO_DISPONIBLE`, que es lo que hace caer al respaldo de MongoDB, queda solo para cuando el motor no está disponible (conexión, timeout, índice inexistente, `401`/`403`, `429` o `5xx`). Una página más allá de los primeros 10 000 resultados responde `200` con `items` vacíos y el `total` y las facetas reales (H-002 y H-003).
   - **Páginas fuera de rango**: `GET /api/historial` y `GET /api/productos` con un número de página enorme (por ejemplo `pagina=10000000000000000000`) responden `200` con la lista vacía y el `total` real; antes daban `500` (H-012). En la pestaña Historial, "Anterior"/"Siguiente" paginan con los últimos filtros aplicados con "Filtrar", no con lo que esté escrito en los campos (H-014).
   - **Checkout**: `id_comprador` puede llegar como número (`12`) o como string numérico (`"12"`); cualquier otro valor responde `400`. Antes, reintentar con `"12"` daba `409 CLAVE_IDEMPOTENCIA_AJENA` (H-004).
-- **Documentación nueva**: [`docs/estrategia-consistencia-checkout.md`](docs/estrategia-consistencia-checkout.md), [ADR-004](docs/decisiones/ADR-004-motor-de-busqueda.md) (por qué Elasticsearch y cómo se diseñó el índice), [ADR-005](docs/decisiones/ADR-005-newsql-pagos.md) (evaluación NewSQL para pagos: no migrar, y cuándo sí), [`docs/arquitectura.md`](docs/arquitectura.md) (diagrama actualizado) y [`docs/informe-entrega-3.md`](docs/informe-entrega-3.md).
+- **Documentación nueva**: [`docs/estrategia-consistencia-checkout.md`](docs/estrategia-consistencia-checkout.md), [ADR-004](docs/decisiones/ADR-004-motor-de-busqueda.md) (por qué Elasticsearch y cómo se diseñó el índice), [ADR-005](docs/decisiones/ADR-005-newsql-pagos.md) (evaluación NewSQL para pagos: no migrar, y cuándo sí), [`docs/arquitectura.md`](docs/arquitectura.md) (diagrama actualizado), [`docs/informe-entrega-3.md`](docs/informe-entrega-3.md), [`docs/guion-demostracion-entrega-3.md`](docs/guion-demostracion-entrega-3.md) (guion de la demostración en vivo) y [`docs/reporte-trabajo-entrega-3.md`](docs/reporte-trabajo-entrega-3.md) (reporte detallado de todo lo trabajado).
 
 ## Novedades de la Entrega 2
 
@@ -603,7 +603,10 @@ docs/
                              + prueba_fraude_ampliado.txt (detección de fraude ampliada, 2026-10-07)
   guia-prueba-fraude.md      Paso a paso para provocar y revisar una alerta de fraude, y limpiar los datos de prueba
   deteccion-fraude-ampliada.md  Detección de fraude ampliada: los 4 patrones, umbrales, puntajes, grafo y verificación (2026-10-07)
-  guia-funcionalidades.docx  Guía en Word por funcionalidad: qué hace, de qué base saca los datos y en qué archivos está (refleja la Entrega 2, ver H-006)
+  guia-funcionalidades.docx  Guía en Word por funcionalidad: qué hace, de qué base saca los datos y en qué archivos está (actualizada al 2026-10-08)
+  informe-entrega-3.docx     Versión en Word del informe de la Entrega 3 (mismo contenido que informe-entrega-3.md)
+  reporte-trabajo-entrega-3.md  Reporte detallado de todo lo trabajado en la Entrega 3
+  guion-demostracion-entrega-3.md  Guion de la demostración en vivo: bloques por presentador, resultados esperados, plan B y preguntas probables
   hallazgos.md               Registro de hallazgos de las pruebas: errores y pendientes, con su estado y corrección
 docker-compose.yml          Redis + Neo4j (Entrega 2) + Elasticsearch (Entrega 3)
 requirements.txt

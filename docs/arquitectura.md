@@ -4,9 +4,9 @@ Arquitectura políglota: cada motor de persistencia cubre el rol para el que est
 
 **Novedades de la Entrega 3** (en el diagrama): **Elasticsearch** como motor de búsqueda (`busqueda.py`), el **outbox** de sincronización en PostgreSQL (`eventos_sincronizacion`), que el checkout procesa al instante tras el COMMIT y su **relevo** reintenta si algo falla, la **clave de idempotencia** del checkout (`checkout_idempotencia`) y el panel de sincronización (`sincronizacion.py`).
 
-**Cambios del 2026-10-07** (sin commit): `ofertas.py` lista las ofertas activas (`SCAN` en Redis más los datos del producto en MongoDB) para el sitio público y para el vendedor, y el carrito de Redis ya no tiene TTL salvo que se configure `CARRITO_TTL_SEGUNDOS` mayor que 0 ([ADR-006](decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md)).
+**Cambios del 2026-10-07** (commit `4aabb9c`): `ofertas.py` lista las ofertas activas (`SCAN` en Redis más los datos del producto en MongoDB) para el sitio público y para el vendedor, y el carrito de Redis ya no tiene TTL salvo que se configure `CARRITO_TTL_SEGUNDOS` mayor que 0 ([ADR-006](decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md)).
 
-**Detección de fraude ampliada (2026-10-07, sin commit)** (en el diagrama): el grafo de Neo4j suma vendedores, direcciones de envío y compra verificada; `direcciones.py` ahora también escribe en Neo4j, `resenas.py` consulta en PostgreSQL si el autor compró el producto, y `fraude.py` corre cuatro patrones nuevos además de la consulta de la Entrega 2. Ver la sección [Grafo de fraude ampliado](#grafo-de-fraude-ampliado-2026-10-07) más abajo y [`deteccion-fraude-ampliada.md`](deteccion-fraude-ampliada.md).
+**Detección de fraude ampliada (2026-10-07, commit `faa62fa`)** (en el diagrama): el grafo de Neo4j suma vendedores, direcciones de envío y compra verificada; `direcciones.py` ahora también escribe en Neo4j, `resenas.py` consulta en PostgreSQL si el autor compró el producto, y `fraude.py` corre cuatro patrones nuevos además de la consulta de la Entrega 2. Ver la sección [Grafo de fraude ampliado](#grafo-de-fraude-ampliado-2026-10-07) más abajo y [`deteccion-fraude-ampliada.md`](deteccion-fraude-ampliada.md).
 
 ```mermaid
 flowchart TB

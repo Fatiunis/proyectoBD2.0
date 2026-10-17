@@ -5,6 +5,7 @@
 **Integrantes:** Diego Rueda, Marcos Pineda, Fátima Ramazzini
 **Repositorio:** github.com/Fatiunis/proyectoBD2.0
 **Tema de la entrega:** recuperación de información y consistencia en operaciones distribuidas (motores de búsqueda, transacciones, NewSQL)
+**Reporte detallado del trabajo:** [`reporte-trabajo-entrega-3.md`](reporte-trabajo-entrega-3.md)
 
 > **Borrador.** Las secciones marcadas con ✏️ las completa el equipo. La evidencia técnica corresponde a pruebas ejecutadas contra el sistema real (PostgreSQL 18, MongoDB 8, Redis 7, Neo4j 5 y Elasticsearch 8.15) el 5 de octubre de 2026.
 
@@ -115,6 +116,8 @@ Script: `backend/scripts/prueba_fallas_checkout.py --caida-real` ([salida comple
 | **E5** Caída real de Elasticsearch | Búsqueda 503; checkout 201 | El checkout no depende del buscador. Al levantar el contenedor, el relevo actualizó su stock en **25 s** |
 
 ### Demostración en vivo (para la presentación)
+
+El guion completo de la presentación (preparación, bloques por presentador, resultados esperados, plan B y preguntas probables) está en [`guion-demostracion-entrega-3.md`](guion-demostracion-entrega-3.md). En resumen:
 
 1. Con `PERMITIR_FALLAS_SIMULADAS=1` en el `.env`, entrar como `maria.torres@email.com` y agregar un producto al carrito.
 2. En "Finalizar compra", elegir en **Simular falla (solo desarrollo)** la opción "PostgreSQL se cae después de ejecutar el procedimiento…" y confirmar: aparece el aviso rojo y el carrito sigue igual.

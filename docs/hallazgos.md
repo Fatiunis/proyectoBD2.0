@@ -8,11 +8,11 @@ Este archivo registra los errores, pendientes y discrepancias que aparecen al pr
 
 **Cómo se cierra una entrada:** no se borra. Se cambia el estado a `corregido en <commit o archivo>` (o `descartado (motivo)`) y se completa "Corrección" con lo que se cambió. Si el hallazgo revela una limitación que se decidió aceptar, se agrega también a "Limitaciones conocidas" del [`README.md`](../README.md).
 
-Los números de línea de las causas de H-001 a H-009 se refieren al código del commit `785789d` (2026-10-06). Los de H-010 a H-015, y los de las correcciones, se refieren al árbol de trabajo del 2026-10-06 (correcciones todavía sin commit). Los de H-016 en adelante, al árbol de trabajo del 2026-10-07 (sobre el commit `06994dd`, con cambios sin commit). Los de H-019 en adelante (detección de fraude ampliada), al árbol de trabajo del 2026-10-07 sobre el commit `4aabb9c`, con cambios sin commit.
+Los números de línea de las causas de H-001 a H-009 se refieren al código del commit `785789d` (2026-10-06). Los de H-010 a H-015, y los de sus correcciones, al commit `06994dd` (2026-10-06). Los de H-016 a H-018, al commit `4aabb9c` (2026-10-07, ofertas flash). Los de H-019 en adelante (detección de fraude ampliada), al commit `faa62fa` (2026-10-08).
 
 ## Verificación del fraude ampliado (2026-10-07)
 
-Verificación de la detección de fraude ampliada ([`deteccion-fraude-ampliada.md`](deteccion-fraude-ampliada.md)) sobre el árbol de trabajo del 2026-10-07 (sin commit), con la semilla `database/migrations/sembrar_fraude_ampliado.py` cargada:
+Verificación de la detección de fraude ampliada ([`deteccion-fraude-ampliada.md`](deteccion-fraude-ampliada.md)) sobre el árbol de trabajo del 2026-10-07 (luego incluido en el commit `faa62fa`), con la semilla `database/migrations/sembrar_fraude_ampliado.py` cargada:
 
 - **Agente de backend**: `python backend/scripts/prueba_fraude_ampliado.py` 59/59 PASS (bloques F1 a F8: positivos, controles, lo que agregan los patrones nuevos frente a la consulta de la Entrega 2, `GET /api/fraude/alertas` intacto, errores, `/resumen`, y sincronización de reseñas y direcciones con Neo4j). Salida real de una corrida del 2026-10-07 en [`evidencia/prueba_fraude_ampliado.txt`](evidencia/prueba_fraude_ampliado.txt).
 - **Agente de base de datos**: el ruido legítimo de `sembrar_resenas_fraude.py` no genera ninguna alerta de los 4 patrones con los umbrales por defecto (0 alertas). (Que cada escenario de control de la semilla nueva quede por debajo de su umbral lo comprueba el bloque F2 de la prueba automática.)
@@ -31,7 +31,7 @@ Verificación de la detección de fraude ampliada ([`deteccion-fraude-ampliada.m
 
 ## Verificación del 2026-10-07 (ofertas flash, ventas y carrito)
 
-Corrida del agente de pruebas sobre el árbol de trabajo del 2026-10-07 (sin commit), con H-017 corregido:
+Corrida del agente de pruebas sobre el árbol de trabajo del 2026-10-07 (luego incluido en el commit `4aabb9c`), con H-017 corregido:
 
 - `descuento_pct` coincide en `POST /api/ofertas`, `GET /api/ofertas/<producto_id>`, el listado público `GET /api/ofertas` y el listado del vendedor `GET /api/vendedores/<id>/ofertas` (PROD-0002, Q2200 → Q1749: 21 en los cuatro).
 - Tope de 99: una oferta de Q0.01 devuelve `descuento_pct` 99. `precio_oferta` 0 o negativo responde `400`, así que un 100 % no es alcanzable, tampoco en el frontend.
@@ -44,7 +44,7 @@ Corrida del agente de pruebas sobre el árbol de trabajo del 2026-10-07 (sin com
 
 ## Re-verificación del 2026-10-06 (después de las correcciones)
 
-Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en el árbol de trabajo:
+Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en el árbol de trabajo (luego incluidas en el commit `06994dd`):
 
 - `python backend/scripts/prueba_buscador.py --caida-real`: 21/21 PASS.
 - `python backend/scripts/prueba_fallas_checkout.py --caida-real`: 45/45 PASS. E4 (MongoDB cae tras el COMMIT) convergió en 16 s y E5 (caída real de Elasticsearch) 15 s después de levantarlo. Creó los pedidos 39 y 41 a 44 de `maria.torres@email.com`. El 40 no existe porque lo consumió el rollback de E2: es el hueco normal de la secuencia que explica la sección 8 de la [estrategia de consistencia](estrategia-consistencia-checkout.md). La [evidencia guardada](evidencia/prueba_fallas_checkout.txt) sigue siendo la de la corrida del 5 de octubre y no se reemplazó.
@@ -63,7 +63,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - `npm run build` (en `frontend/app/`): OK.
 
 ## H-024 — "Ajustar sensibilidad" acepta un porcentaje mayor que 100 (2026-10-07)
-- **Estado:** corregido en el árbol de trabajo (`frontend/app/src/components/admin/AlertasPatron.vue`; 2026-10-07, sin commit)
+- **Estado:** corregido en el commit `faa62fa` (`frontend/app/src/components/admin/AlertasPatron.vue`; 2026-10-07)
 - **Severidad:** menor
 - **Área:** frontend
 - **Síntoma:** en la pestaña "Cuenta en ráfaga" del panel `/admin/fraude`, el campo `min_pct_sin_compra` de "Ajustar sensibilidad" deja escribir un valor mayor que 100. El backend responde `400` ("min_pct_sin_compra debe ser un entero entre 1 y 100") y el panel muestra un error. El campo debería limitarse a 1-100 antes de enviar.
@@ -72,7 +72,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - **Corrección:** `AlertasPatron.vue:23-28`: `esPorcentaje` reconoce como porcentaje todo parámetro que tenga `pct` como palabra en el nombre (por ejemplo `min_pct_sin_compra`), y `valorValido` exige para esos un entero entre 1 y 100 (el resto, un entero positivo). El campo tiene `max="100"` (línea 96) y, si el valor no es válido, muestra "Debe ser un entero entre 1 y 100" (línea 107); si es válido, la ayuda dice "Entre 1 y 100 · Por defecto 80" (línea 109). Verificado con `npm run build`; falta la prueba visual en el navegador.
 
 ## H-023 — Comentarios de los scripts del fraude ampliado con nombres de patrones viejos (2026-10-07)
-- **Estado:** corregido en el árbol de trabajo (2026-10-07)
+- **Estado:** corregido en el commit `faa62fa` (2026-10-07)
 - **Severidad:** documentación
 - **Área:** database
 - **Síntoma:** el docstring de `database/migrations/sincronizar_grafo_fraude.py` dice que el grafo ampliado lo usan los patrones "promotor_sin_compra, ataque_competencia, rafaga_producto y cuentas_vinculadas". Los patrones que existen son `cuenta_rafaga`, `grupo_coordinado`, `sesgo_vendedor_sin_compra` y `cuentas_vinculadas`; los otros tres se eliminaron durante el desarrollo (la prueba verifica que respondan `404`). Además, `database/neo4j/02_fraude_ampliado.cypher` y ese mismo docstring dicen "(Entrega 3)", aunque el cambio es posterior a la Entrega 3.
@@ -117,7 +117,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - **Corrección:** por ahora, relanzar `python backend/main.py` a mano. Si se vuelve molesto, se puede proponer al agente de backend arrancar sin recargador (`use_reloader=False`) en Windows, a cambio de reiniciar a mano después de cada cambio.
 
 ## H-018 — En los resultados de búsqueda, la etiqueta de oferta solo marca una oferta (2026-10-07)
-- **Estado:** corregido en el árbol de trabajo (`frontend/app/src/components/publico/NavPublica.vue`; 2026-10-07, sin commit)
+- **Estado:** corregido en el commit `4aabb9c` (`frontend/app/src/components/publico/NavPublica.vue`; 2026-10-07)
 - **Severidad:** menor
 - **Área:** frontend
 - **Síntoma:** en los resultados de búsqueda, la etiqueta "⚡ -X%" de `TarjetaProducto.vue` aparece solo en un producto en oferta, aunque haya varias ofertas vigentes. Debería aparecer en todos los productos con oferta vigente, como en el catálogo.
@@ -126,7 +126,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - **Corrección:** `NavPublica.vue:24` se suscribe con `useOfertasFlash({ limite: 100 })` (comentario en las líneas 21-23). Como la barra está montada en todas las vistas públicas, el estado compartido tiene siempre todas las ofertas y `ofertaActivaDe` las encuentra también en los resultados de búsqueda; sigue siendo una sola petición cada 20 s. Además, el contador del botón "Ofertas" (`NavPublica.vue:25`) cuenta solo las ofertas disponibles (`ofertaDisponible`: con cupo y sin terminar), igual que el "N activas" de la franja, en vez del `total` del backend, que incluye las agotadas. De paso, el botón "Ver →" de la franja contraída tiene `aria-label` "Ver todas las ofertas flash" (`FranjaOfertasFlash.vue:162`). Verificado con `npm run build` y `GET /api/ofertas?limite=100` (3 ofertas); falta la prueba visual en el navegador.
 
 ## H-017 — `descuento_pct` puede valer 100 aunque la oferta cobre algo (2026-10-07)
-- **Estado:** corregido en el árbol de trabajo (`backend/app/blueprints/ofertas.py`, `_descuento_pct`; 2026-10-07, sin commit)
+- **Estado:** corregido en el commit `4aabb9c` (`backend/app/blueprints/ofertas.py`, `_descuento_pct`; 2026-10-07)
 - **Severidad:** menor
 - **Área:** backend
 - **Síntoma:** con un precio de oferta muy bajo frente al precio normal, `POST /api/ofertas` y `GET /api/ofertas` devuelven `"descuento_pct": 100`, aunque el producto no es gratis. La interfaz muestra 99 %, porque `frontend/app/src/utils/descuento.js:15` limita el porcentaje a 99 mientras el precio de oferta sea mayor que 0. Un cliente de la API que use el valor tal cual mostraría "-100 %".
@@ -153,7 +153,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - **Corrección:** se comparó el stock de los 1015 productos entre los tres motores. Solo difería en PROD-0004 (MongoDB/Elasticsearch 30 → 29) y PROD-0014 (58 → 57); a esos dos se les copió `stock_disponible` desde PostgreSQL con una actualización parcial del campo en MongoDB y en Elasticsearch. **Verificado:** la comparación final da 0 desfases, y el tester la volvió a correr con el mismo resultado.
 
 ## H-014 — Cambiar de página en el Historial usa filtros que no se aplicaron (2026-10-06)
-- **Estado:** corregido en el árbol de trabajo (2026-10-06), pendiente de commit (`frontend/app/src/components/admin/HistorialProducto.vue`)
+- **Estado:** corregido en el commit `06994dd` (2026-10-06; `frontend/app/src/components/admin/HistorialProducto.vue`)
 - **Severidad:** menor
 - **Área:** frontend
 - **Síntoma:** en la pestaña Historial del admin, "Anterior"/"Siguiente" vuelve a consultar con lo que está escrito en los filtros en ese momento, no con los últimos que se aplicaron con "Filtrar". Si el texto del producto no corresponde a ninguno de la lista, aparece el aviso "Selecciona un producto válido de la lista antes de filtrar", pero el número de página avanza igual: se ve "Página 3 de 51" con la tabla de la página 2 sin cambios. Debería paginar con los filtros aplicados, o al menos no cambiar de página si la carga no se hizo.
@@ -172,7 +172,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - **Corrección (propuesta):** agregar a `Paginacion.vue` una prop opcional `totalPaginas` que, si viene, reemplace el cálculo, y pasarle `total_paginas` desde `ResultadosBusqueda.vue`. El catálogo y el historial no cambian.
 
 ## H-012 — Un número de página enorme responde 500 en el historial y el catálogo (2026-10-06)
-- **Estado:** corregido en el árbol de trabajo (2026-10-06), pendiente de commit (`backend/app/blueprints/historial.py`, `backend/app/blueprints/catalogo.py`)
+- **Estado:** corregido en el commit `06994dd` (2026-10-06; `backend/app/blueprints/historial.py`, `backend/app/blueprints/catalogo.py`)
 - **Severidad:** menor
 - **Área:** backend
 - **Síntoma:** `GET /api/historial?pagina=10000000000000000000` y `GET /api/productos?pagina=10000000000000000000` responden `500` con `OverflowError: MongoDB can only handle up to 8-byte ints`. Deberían responder como cualquier página posterior a la última (`200` con la lista vacía y el `total` real) o con un `400`. En el catálogo el error es anterior a las correcciones de este día. No es alcanzable desde la interfaz.
@@ -181,7 +181,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - **Corrección:** `historial.py` topa el `$skip` con `SALTO_MAXIMO = 2**63 - 1` (`historial.py:11` y `:100`), el mayor entero que acepta MongoDB y que sigue quedando más allá de cualquier total real. `catalogo.py` no consulta la página si el salto es mayor o igual que el `total` (`catalogo.py:223-224`) y devuelve `items` vacíos con el `total` real. `GET /api/busqueda` ya era seguro por la ventana de 10 000 resultados (H-002). **Verificado por el tester:** 238/238 casos (`pagina` 10^19, 10^30, 2^63, 2^64 y 999, con y sin filtros) responden `200` con la lista vacía y el `total` real, y los recorridos completos de ambas rutas siguen sin duplicados.
 
 ## H-011 — El feed del Historial solo mostraba los 50 eventos más recientes (2026-10-06)
-- **Estado:** corregido en el árbol de trabajo (2026-10-06), pendiente de commit (`backend/app/blueprints/historial.py`, `frontend/app/src/components/admin/HistorialProducto.vue`)
+- **Estado:** corregido en el commit `06994dd` (2026-10-06; `backend/app/blueprints/historial.py`, `frontend/app/src/components/admin/HistorialProducto.vue`)
 - **Severidad:** menor (mejora pedida por el usuario)
 - **Área:** backend, frontend
 - **Síntoma:** `GET /api/historial` devolvía solo los 50 eventos más recientes (como máximo 200 con `limit`), sin el total ni forma de ver los anteriores. La base tiene 1016 eventos, así que la pestaña Historial del admin escondía casi todos. Debería poder recorrerlos todos.
@@ -190,7 +190,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - **Corrección:** `GET /api/historial` ahora está paginado: acepta `pagina` y `por_pagina` (20 por defecto, máximo 100; `limit` se acepta como alias de `por_pagina`; valores no numéricos responden `400`) y devuelve `{eventos, total, pagina, por_pagina, total_paginas}`. Ordena por `fecha_evento` descendente con desempate por `_id`, y cuenta y pagina en una sola consulta con `$facet`; sin filtro de vendedor, el `$lookup` al producto se hace solo sobre la página. En el frontend, `HistorialProducto.vue` usa `components/comunes/Paginacion.vue`, muestra "N eventos" y vuelve a la página 1 al pulsar "Filtrar" o "Limpiar filtros". **Verificado:** los 1016 eventos recorridos sin duplicados con 20, 37 y 100 por página, y con filtros combinados. Queda abierto H-014.
 
 ## H-010 — La paginación de `GET /api/productos` repetía y saltaba productos (2026-10-06)
-- **Estado:** corregido en el árbol de trabajo (2026-10-06), pendiente de commit (`backend/app/blueprints/catalogo.py`)
+- **Estado:** corregido en el commit `06994dd` (2026-10-06; `backend/app/blueprints/catalogo.py`)
 - **Severidad:** menor
 - **Área:** backend
 - **Síntoma:** al recorrer las 43 páginas de 24 productos de `GET /api/productos`, llegaban 1015 ítems, pero solo 1001 distintos: algunos productos aparecían en dos páginas y 14 no aparecían nunca. Cada producto debería aparecer exactamente una vez.
@@ -217,7 +217,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - **Corrección:** se corrigió cada punto en el documento correspondiente. En ADR-004 (ya aceptado) solo se corrigieron las cifras, con una nota que indica la fecha de la corrección; la decisión no cambia. Además se agregó este registro al README (Estado del proyecto y Estructura del repositorio) y se anotó H-001 en "Limitaciones conocidas".
 
 ## H-008 — `.gitignore` no ignora respaldos del `.env` (2026-10-06)
-- **Estado:** corregido en el árbol de trabajo (2026-10-06), pendiente de commit (`.gitignore`)
+- **Estado:** corregido en el commit `06994dd` (2026-10-06; `.gitignore`)
 - **Severidad:** menor
 - **Área:** repositorio
 - **Síntoma:** `.gitignore` solo ignora `.env`. Un respaldo como `.env.bak` (hay uno sin seguimiento en el repo local) aparece como archivo nuevo y se podría subir por error con las contraseñas. Debería quedar ignorado.
@@ -226,7 +226,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - **Corrección:** se agregaron a `.gitignore` las reglas `.env.*` y `!.env.example`, con un comentario. **Verificado:** `git check-ignore -v .env.bak` responde con la regla `.env.*`, y `.env.example` sigue sin ignorarse (versionado).
 
 ## H-007 — `docs/hola.html` es un archivo vacío (2026-10-06)
-- **Estado:** corregido en el árbol de trabajo (2026-10-06), pendiente de commit (`docs/hola.html` borrado)
+- **Estado:** corregido en el commit `06994dd` (2026-10-06; `docs/hola.html` borrado)
 - **Severidad:** menor
 - **Área:** repositorio
 - **Síntoma:** `docs/hola.html` pesa 0 bytes y ningún documento ni código lo referencia. No aporta nada a la entrega y puede confundir al catedrático.
@@ -235,7 +235,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - **Corrección:** se borró el archivo (borrado ya preparado en el índice de git). **Verificado:** `docs/hola.html` ya no existe y ningún documento del repositorio lo menciona, salvo este registro.
 
 ## H-006 — `docs/guia-funcionalidades.docx` desactualizada (2026-10-06)
-- **Estado:** abierto (pendiente de regenerar)
+- **Estado:** corregido el 2026-10-08 (guía regenerada)
 - **Severidad:** documentación
 - **Área:** documentación
 - **Síntoma:** la guía en Word refleja la Entrega 2. Afirma cosas que ya no son ciertas:
@@ -252,7 +252,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
   Actualización del 2026-10-07: tampoco cubre los cambios posteriores a la Entrega 3: el listado público de ofertas (`GET /api/ofertas`, botón "Ofertas" de la barra, página de ofertas flash y franja encima del catálogo; `ofertas.py`, `ofertas_redis.py`, `OfertasFlash.vue`, `FranjaOfertasFlash.vue`, `TarjetaOfertaPublica.vue`, `useOfertasFlash.js`), el precio de oferta con cuenta regresiva en la página del producto (`VistaDetalleProducto.vue`), la pestaña "Ofertas flash" del vendedor (`GET /api/vendedores/<id>/ofertas`, `GestionOfertas.vue`, `FormularioOferta.vue`, `TarjetaOferta.vue`), "Mis ventas" para el administrador con `rol_solicitante` e `id_usuario` obligatorios, y el carrito sin expiración por defecto (`CARRITO_TTL_SEGUNDOS=0`, ver H-016 y ADR-006). Si la guía describe el carrito como "expira a los 30 minutos", eso ya no es el valor por defecto. Tampoco cubre la franja de ofertas dentro de `CatalogoProductos.vue` (encima de la grilla, contraíble), la etiqueta "⚡ -X%" en `TarjetaProducto.vue`, los filtros de la página de ofertas (en el navegador, distintos de los del sidebar del catálogo) ni `descuento_pct` en `GET /api/ofertas/<producto_id>`.
 - **Cómo reproducirlo:** abrir `docs/guia-funcionalidades.docx` y compararlo con el README y el código citado.
 - **Causa:** la guía se generó con el estado de la Entrega 2 (commit `07e8bde`) y no se actualizó con la Entrega 3.
-- **Corrección (propuesta):** regenerar la guía con los puntos de arriba. Es un archivo binario: no se edita a mano desde el repositorio; lo decide y coordina el orquestador.
+- **Corrección:** se regeneró la guía el 2026-10-08 a partir del código y la documentación (15 páginas, generada con docx-js; índice y campos actualizados en Word). Corrige todo lo de arriba: cinco motores con la tabla de Elasticsearch; la sincronización por el outbox con su ventana de consistencia; que editar el stock en el admin lo copia al `inventario` de PostgreSQL y reindexa en Elasticsearch (el precio no); el checkout con idempotencia, compensación, `409 CARRITO_VACIO` y los mensajes al usuario; el catálogo paginado; y que Redis no es obligatorio para arrancar. Agrega las funcionalidades que faltaban: buscador (4.4), "Mi cuenta" con el máximo de 3 direcciones (4.2), sincronización y panel (4.8), fallas simuladas (4.9), ofertas flash en el sitio y del vendedor (4.11 y 4.12), carrito sin expiración por defecto (4.6, ADR-006), historial paginado (4.15), "Mis ventas" con rol obligatorio (4.16) y la detección de fraude con sus seis pestañas (4.14), más los documentos nuevos en "Dónde seguir leyendo". **Verificado:** se convirtió a PDF con Word y se revisaron las páginas renderizadas; las rutas de la API listadas coinciden con los `@bp.route` de `backend/app/blueprints/`.
 
 ## H-005 — Los resultados del buscador no muestran atributos (2026-10-06)
 - **Estado:** abierto (decidir si es el comportamiento deseado)
@@ -264,7 +264,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - **Corrección (propuesta):** decidir si se quiere mostrar atributos en los resultados. Si sí, devolverlos desde `busqueda_es.py` (el índice ya los guarda, en el campo `flattened`); si no, cerrar la entrada como descartada.
 
 ## H-004 — Reintento de checkout con `id_comprador` como texto responde 409 (2026-10-06)
-- **Estado:** corregido en el árbol de trabajo (2026-10-06), pendiente de commit (`backend/app/blueprints/checkout.py`)
+- **Estado:** corregido en el commit `06994dd` (2026-10-06; `backend/app/blueprints/checkout.py`)
 - **Severidad:** menor
 - **Área:** backend
 - **Síntoma:** al repetir `POST /api/checkout` con la misma clave de idempotencia del propio comprador, pero mandando `id_comprador` como string (`"12"`), responde `409 CLAVE_IDEMPOTENCIA_AJENA`. Debería responder `200` con `"repetido": true` y el mismo pedido. El frontend manda un número, así que no afecta a la interfaz.
@@ -273,7 +273,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - **Corrección:** un helper nuevo, `_id_entero` (`checkout.py:145-156`), normaliza `id_comprador` a entero al inicio de `procesar_checkout` (`checkout.py:182-186`), antes de compararlo con la clave de idempotencia, de armar la clave del carrito y de llamar al procedimiento. Acepta un entero positivo o un string con dígitos (`"12"`); cualquier otro valor (`"abc"`, `0`, negativos, `true`, decimales) responde `400` con "id_comprador debe ser un número entero positivo". **Verificado:** `POST /api/checkout` con `"id_comprador": "abc"` responde `400` con ese mensaje, sin tocar el carrito ni la base, y `prueba_fallas_checkout.py --caida-real` sigue en 45/45. El reintento con `"12"` y la misma clave no se volvió a ejecutar a mano en esta verificación: queda cubierto por la lectura del código, porque las comparaciones con la clave guardada (`checkout.py:204` y `:349` en el árbol de trabajo) ahora reciben el entero normalizado.
 
 ## H-003 — `precio_min=nan` o `precio_max=inf` en el buscador responden 503 (2026-10-06)
-- **Estado:** corregido en el árbol de trabajo (2026-10-06), pendiente de commit (`backend/app/blueprints/busqueda.py`)
+- **Estado:** corregido en el commit `06994dd` (2026-10-06; `backend/app/blueprints/busqueda.py`)
 - **Severidad:** menor
 - **Área:** backend
 - **Síntoma:** `GET /api/busqueda?q=mouse&precio_min=nan` (o `precio_max=inf`) pasa la validación y Elasticsearch lo rechaza; el backend responde `503 BUSCADOR_NO_DISPONIBLE`, como si el motor estuviera caído. Debería responder `400` con un mensaje de parámetro inválido.
@@ -282,7 +282,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
 - **Corrección:** `_decimal` rechaza los valores no finitos con `math.isfinite` (`busqueda.py:76-77`), y la ruta responde `400` con "'precio_min' debe ser un número finito". **Verificado:** el comando de arriba responde `400`.
 
 ## H-002 — Páginas muy altas del buscador responden 503 (2026-10-06)
-- **Estado:** corregido en el árbol de trabajo (2026-10-06), pendiente de commit (`backend/app/busqueda_es.py`, `backend/app/blueprints/busqueda.py`)
+- **Estado:** corregido en el commit `06994dd` (2026-10-06; `backend/app/busqueda_es.py`, `backend/app/blueprints/busqueda.py`)
 - **Severidad:** menor
 - **Área:** backend
 - **Síntoma:** `GET /api/busqueda?q=mouse&pagina=500` responde `503 BUSCADOR_NO_DISPONIBLE`. Elasticsearch rechaza la consulta porque `from + size` supera su `max_result_window` (10 000), y el backend trata ese rechazo como una caída. El frontend caería entonces al respaldo de MongoDB y mostraría "búsqueda simplificada" aunque el motor esté funcionando. Debería devolver una página vacía o un `400`.
@@ -295,7 +295,7 @@ Con las correcciones de H-001 a H-004, H-007, H-008, H-010 y H-011 aplicadas en 
   **Verificado:** el comando de arriba responde `200` con `items` vacíos, `total` 40 y `total_paginas` 2; `prueba_buscador.py --caida-real` sigue en 21/21 (con Elasticsearch detenido de verdad responde `503`). Queda abierto H-013, del lado del frontend.
 
 ## H-001 — La pestaña Historial del admin no carga (2026-10-06)
-- **Estado:** corregido en el árbol de trabajo (2026-10-06), pendiente de commit (`frontend/app/src/components/admin/HistorialProducto.vue`)
+- **Estado:** corregido en el commit `06994dd` (2026-10-06; `frontend/app/src/components/admin/HistorialProducto.vue`)
 - **Severidad:** bloqueante
 - **Área:** frontend
 - **Síntoma:** al abrir `/admin/historial`, el selector de productos no carga y la consola muestra "data is not iterable". Debería listar todos los productos (o los del vendedor) para elegir uno y ver su historial. Ya estaba anotado en [`STACK.md`](STACK.md) (bitácora de la Entrega 2, catálogo paginado).
