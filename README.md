@@ -362,7 +362,7 @@ Levanta tres servicios:
 - **Neo4j** (puertos `7474` browser / `7687` bolt, usuario `neo4j` / contraseña `tiendaya123`): detección de fraude en reseñas.
 - **Elasticsearch** (puerto `9200`): buscador del catálogo.
 
-Dale unos 20-40 segundos a Neo4j y a Elasticsearch antes de seguir, tardan más que Redis en quedar listos. Puedes verificarlo con `docker compose ps` (Elasticsearch aparece `healthy`) o con `curl http://localhost:9200`.
+Dale unos 20-40 segundos a Neo4j y a Elasticsearch antes de seguir, tardan más que Redis en quedar listos. Puedes verificarlo con `docker compose ps` (Elasticsearch aparece `healthy`) o con `curl http://localhost:9200`. Para abrir cada base con una interfaz gráfica (incluidos RedisInsight y Kibana, que están en el perfil opcional `visores`), mira [Ver las bases de datos](#ver-las-bases-de-datos).
 
 Indexa el catálogo de MongoDB en Elasticsearch (necesita el paso 4 hecho). Crea un índice nuevo, verifica que tenga la misma cantidad de productos que Mongo y recién entonces mueve el alias `productos` hacia él, así que es seguro correrlo las veces que haga falta, incluso con el backend andando:
 
@@ -444,6 +444,101 @@ npm run dev -- --port 5300
 ```
 
 El backend tiene CORS abierto a cualquier origen (`CORS(app)` en `backend/app/__init__.py`), así que el frontend funciona igual desde otro puerto. En macOS/Linux esto no pasa.
+
+## Ver las bases de datos
+
+TiendaYa usa cinco bases. Con esta tabla puedes abrir cada una con una interfaz gráfica para ver qué guardó la aplicación:
+
+| Base | Qué guarda | Herramienta | Dónde |
+|---|---|---|---|
+| **PostgreSQL** | Usuarios, direcciones, pedidos, pagos, inventario, outbox del checkout | **pgAdmin 4** (viene con el instalador de PostgreSQL) | App de escritorio |
+| **MongoDB** | Catálogo, historial de cambios, reseñas | **MongoDB Compass** (viene con el instalador de MongoDB, o se [descarga](https://www.mongodb.com/try/download/compass)) | App de escritorio |
+| **Redis** | Carritos y ofertas flash | **RedisInsight** (contenedor) | http://localhost:5540 |
+| **Neo4j** | Grafo de reseñas para fraude | **Neo4j Browser** (incluido en Neo4j) | http://localhost:7474 |
+| **Elasticsearch** | Índice del buscador | **Kibana** (contenedor) | http://localhost:5601 |
+
+RedisInsight y Kibana están en el `docker-compose.yml` dentro del perfil **`visores`**, así que **no** arrancan con `docker compose up -d`. Levántalos cuando los necesites (con Redis y Elasticsearch ya corriendo):
+
+```bash
+docker compose --profile visores up -d     # levanta RedisInsight y Kibana
+docker compose --profile visores stop      # los detiene (y también el resto de los servicios)
+```
+
+Kibana tarda 1-2 minutos en estar listo la primera vez y usa cerca de 1 GB de RAM. Si solo te interesa una de las dos, levántala por nombre: `docker compose --profile visores up -d redisinsight`.
+
+### PostgreSQL → pgAdmin 4
+
+1. Abre pgAdmin 4. En **Servers** debería aparecer ya tu PostgreSQL local; si no, clic derecho → **Register → Server**. En la pestaña *Connection* pon host `localhost`, puerto `5432`, usuario `postgres` y la misma contraseña que tienes en `PG_PASSWORD` del `.env`.
+2. Navega a **Databases → tiendaya_db → Schemas → public → Tables**. Clic derecho sobre una tabla → **View/Edit Data → All Rows**.
+3. Para consultas: selecciona `tiendaya_db` y abre **Tools → Query Tool**. Por ejemplo:
+
+```sql
+-- Últimos pedidos con su pago
+SELECT p.id_pedido, u.email, p.estado, p.total, pg.referencia_transaccion, p.fecha_pedido
+FROM pedidos p JOIN usuarios u ON u.id_usuario = p.id_comprador
+LEFT JOIN pagos pg ON pg.id_pedido = p.id_pedido
+ORDER BY p.id_pedido DESC LIMIT 20;
+
+-- Outbox del checkout (Entrega 3): qué quedó pendiente o falló
+SELECT id_evento, tipo, estado, intentos, ultimo_error, id_pedido
+FROM eventos_sincronizacion ORDER BY id_evento DESC LIMIT 20;
+```
+
+Sin pgAdmin, también puedes usar `psql -U postgres -d tiendaya_db` en la terminal.
+
+### MongoDB → MongoDB Compass
+
+1. Abre Compass y conéctate con la URI `mongodb://localhost:27017` (la misma de `MONGO_URI`).
+2. Entra a la base **`tiendaya_nosql`**. Tiene tres colecciones: `productos` (el catálogo), `historial_cambios_productos` (un evento por cada cambio de producto) y `resenas`.
+3. En la barra **Filter** de una colección puedes buscar documentos, por ejemplo:
+   - `{ "categoria.nombre": "Laptops" }` en `productos`
+   - `{ "producto_id": "PROD-0001" }` en `historial_cambios_productos` (ordena con `{ "fecha_evento": -1 }` en *Sort*)
+   - En la pestaña **Indexes** ves los índices (`idx_categoria_activo_precio`, `idx_texto_busqueda`…), y en **Aggregations** puedes armar pipelines.
+
+### Redis → RedisInsight (http://localhost:5540)
+
+1. La primera vez, acepta los términos de uso. La conexión **"TiendaYa (Redis)"** se crea sola al aceptarlos, porque viene configurada en el `docker-compose.yml`. Si no aparece, haz clic en **+ Add Redis database** y usa host **`redis`**, puerto `6379` y sin contraseña. No pongas `localhost`: RedisInsight corre en otro contenedor, y para él `localhost` es él mismo.
+2. En **Browser** escribe un patrón en el buscador:
+   - `carrito:*`: un hash por comprador (`carrito:<id_usuario>`). Cada campo es una línea del carrito.
+   - `oferta:*`: las ofertas flash. `oferta:<producto>:stock` es el cupo sin vender; también están `:limite`, `:precio`, `:id` y el hash `:reservas`. La columna **TTL** muestra cuánto le queda a la oferta.
+3. Sin RedisInsight: `docker compose exec redis redis-cli`, y luego `SCAN 0 MATCH oferta:* COUNT 100`, `HGETALL carrito:4` o `TTL oferta:PROD-0001:stock`.
+
+### Neo4j → Neo4j Browser (http://localhost:7474)
+
+1. Conéctate con *Connect URL* `neo4j://localhost:7687`, usuario `neo4j` y contraseña `tiendaya123`.
+2. Escribe una consulta en la barra superior y presiona **Ctrl+Enter**:
+
+```cypher
+// Quién calificó qué (vista de grafo)
+MATCH (c:Cuenta)-[r:CALIFICO]->(p:Producto) RETURN c, r, p LIMIT 100
+
+// Cuántos nodos y relaciones de cada tipo hay
+MATCH (n) RETURN labels(n)[0] AS etiqueta, count(*) AS total
+```
+
+Con el grafo de fraude ampliado (`sincronizar_grafo_fraude.py`, ver el [paso 5](#5-levantar-redis-neo4j-y-elasticsearch-y-sembrar-los-datos)) también hay nodos `Vendedor` y `Direccion`. Por ejemplo, `MATCH (c:Cuenta)-[:ENVIA_A]->(d:Direccion)<-[:ENVIA_A]-(otra:Cuenta) RETURN c, d, otra` muestra cuentas que comparten dirección. Haz clic en un nodo para ver sus propiedades, o cambia a la vista **Table**.
+
+### Elasticsearch → Kibana (http://localhost:5601)
+
+1. Abre el menú (☰) → **Management → Dev Tools**. Ahí escribes consultas a la izquierda y las ejecutas con ▶ (o **Ctrl+Enter**):
+
+```
+GET _cat/indices/productos*?v
+GET _alias/productos
+GET productos/_mapping
+GET productos/_search
+{
+  "query": { "match": { "nombre": { "query": "laptp", "fuzziness": "AUTO" } } },
+  "_source": ["nombre", "precio_base", "stock_disponible"]
+}
+```
+
+2. Para navegar los documentos con una tabla, ve a **Analytics → Discover** y crea un *data view* con el patrón `productos`.
+3. Kibana crea sus propios índices internos (los que empiezan con punto, como `.kibana_8.15.3_001`). No afectan al índice `productos` del buscador.
+
+Sin Kibana, Elasticsearch también se puede consultar desde el navegador, por ejemplo http://localhost:9200/productos/_search?q=laptop&pretty.
+
+**Si `localhost:5540` o `localhost:5601` no abren en Windows**: puede pasar lo mismo que con el puerto de Vite (un rango reservado por Hyper-V/WSL). Revísalo con el comando `netsh` de la sección anterior y, si hace falta, cambia el puerto de la izquierda en el `docker-compose.yml` (por ejemplo, `"5541:5540"`).
 
 ## Credenciales de prueba
 
@@ -608,7 +703,7 @@ docs/
   reporte-trabajo-entrega-3.md  Reporte detallado de todo lo trabajado en la Entrega 3
   guion-demostracion-entrega-3.md  Guion de la demostración en vivo: bloques por presentador, resultados esperados, plan B y preguntas probables
   hallazgos.md               Registro de hallazgos de las pruebas: errores y pendientes, con su estado y corrección
-docker-compose.yml          Redis + Neo4j (Entrega 2) + Elasticsearch (Entrega 3)
+docker-compose.yml          Redis + Neo4j (Entrega 2) + Elasticsearch (Entrega 3); perfil "visores": RedisInsight + Kibana
 requirements.txt
 .env.example
 ```

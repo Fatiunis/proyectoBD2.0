@@ -36,7 +36,42 @@ services:
       timeout: 10s
       retries: 12
 
+  # ------------------------------------------------------------------------
+  # Visores (opcionales): interfaces web para mirar los datos. No arrancan con
+  # "docker compose up -d"; se levantan aparte con:
+  #   docker compose --profile visores up -d
+  # Ver README -> "Ver las bases de datos".
+  # ------------------------------------------------------------------------
+
+  # Redis -> http://localhost:5540 (ya conectado al Redis de este compose).
+  redisinsight:
+    image: redis/redisinsight:latest
+    profiles: ["visores"]
+    ports:
+      - "5540:5540"
+    environment:
+      - RI_REDIS_HOST=redis
+      - RI_REDIS_PORT=6379
+      - RI_REDIS_ALIAS=TiendaYa (Redis)
+    volumes:
+      - redisinsight_data:/data
+    depends_on:
+      - redis
+
+  # Elasticsearch -> http://localhost:5601 (Kibana; usar "Dev Tools" para
+  # consultas). Misma versión que el Elasticsearch de arriba.
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.3
+    profiles: ["visores"]
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+
 volumes:
   redis_data:
   neo4j_data:
   elasticsearch_data:
+  redisinsight_data:
