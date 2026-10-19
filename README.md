@@ -183,6 +183,37 @@ Qué se construyó, en concreto:
 - Node.js `^20.19.0` o `>=22.12.0` + npm (requerido por Vite para levantar el frontend)
 - **Docker + Docker Compose** (para levantar Redis, Neo4j y Elasticsearch). Elasticsearch usa unos 1-1.5 GB de RAM (heap de 512 MB más la propia JVM)
 
+## Arranque diario (después de apagar o reiniciar la computadora)
+
+Esto es para cuando el proyecto **ya está instalado** (si es la primera vez, sigue la [Instalación](#instalación)). Los datos no se pierden al apagar: PostgreSQL y MongoDB los guardan en disco, y Redis, Neo4j y Elasticsearch, en volúmenes de Docker. Solo hay que volver a encender los servicios, en este orden:
+
+1. **Abre Docker Desktop** y espera a que diga *Engine running* (abajo a la izquierda). PostgreSQL y MongoDB, si los instalaste como servicios de Windows, arrancan solos con la computadora.
+2. **Levanta Redis, Neo4j y Elasticsearch.** Abre una terminal en la carpeta del proyecto:
+   ```bash
+   docker compose up -d
+   ```
+   Espera de 30 a 40 segundos. Elasticsearch está listo cuando http://localhost:9200 muestra un JSON, o cuando `docker compose ps` lo marca `healthy`.
+3. **Levanta el backend**, en esa misma terminal (déjala abierta):
+   ```bash
+   venv\Scripts\activate          # macOS/Linux: source venv/bin/activate
+   python backend/main.py
+   ```
+   Tiene que mostrar `Running on http://127.0.0.1:8000` y `[relevo] Relevo de eventos de sincronización activo`.
+4. **Levanta el frontend** en una **segunda terminal** (déjala abierta también):
+   ```bash
+   cd frontend/app
+   npm run dev
+   ```
+   Abre la dirección que muestra (normalmente http://localhost:5173). Si falla con `EACCES`, usa `npm run dev -- --port 5300` (ver el [paso 7](#7-levantar-el-frontend)).
+5. **(Opcional) Visores de las bases:** `docker compose --profile visores up -d` levanta RedisInsight y Kibana (ver [Ver las bases de datos](#ver-las-bases-de-datos)).
+
+**Para apagar todo:** `Ctrl+C` en las terminales del backend y del frontend, y luego `docker compose --profile visores stop` (o `docker compose stop` si no levantaste los visores). Nunca uses `docker compose down -v`: la `-v` **borra los volúmenes** y con ellos los datos de Redis, Neo4j y Elasticsearch.
+
+**Si algo no responde:**
+- PostgreSQL o MongoDB no conectan: en Windows, abre *Servicios* (`services.msc`) y verifica que `postgresql-x64-18` y `MongoDB` estén *En ejecución*.
+- El buscador muestra "búsqueda simplificada": Elasticsearch todavía está arrancando o no tiene el índice. Espera un poco y, si sigue igual, corre `python database/migrations/indexar_productos_elasticsearch.py`.
+- El carrito, las ofertas o el panel de fraude dan error (en la consola del backend aparece un error de Redis o Neo4j): los contenedores no están corriendo. Revisa con `docker compose ps` y corre `docker compose up -d`. No hace falta reiniciar el backend: se reconecta solo.
+
 ## Instalación
 
 Sigue los pasos en orden. Si ya tenías el proyecto montado de una entrega anterior, puedes saltar directo al paso 5.
@@ -407,13 +438,39 @@ Flask queda escuchando en `http://127.0.0.1:8000`. Internamente, `backend/main.p
 
 #### Probar las fallas del checkout
 
-Con `PERMITIR_FALLAS_SIMULADAS=1` en el `.env` (y el backend reiniciado), el formulario de checkout muestra un selector **Simular falla (solo desarrollo)**. Los scripts automáticos verifican cada escenario directamente en los cuatro motores. Crean pedidos reales en tu base local, del comprador `maria.torres@email.com`:
+Hay dos formas: un **script automático**, que corre todos los escenarios y revisa cada base, y una **prueba a mano desde el navegador**, que sirve para la demostración. Las dos crean pedidos reales en tu base local.
+
+**Antes de empezar (las dos formas):**
+1. En el `.env` de la raíz debe estar la línea `PERMITIR_FALLAS_SIMULADAS=1`. Si la agregaste ahora, reinicia el backend (Ctrl+C y `python backend/main.py`).
+2. Deben estar arriba los contenedores (`docker compose up -d`), PostgreSQL y MongoDB, y el backend.
+
+**Forma 1: script automático.** En **otra** terminal (el backend debe seguir corriendo en la primera), desde la raíz del proyecto:
 
 ```bash
-python backend/scripts/prueba_fallas_checkout.py               # camino feliz + 4 fallas simuladas (E0-E4)
-python backend/scripts/prueba_fallas_checkout.py --caida-real  # + caída real de Elasticsearch (E5): la detiene y la levanta
+venv\Scripts\activate
+python backend/scripts/prueba_fallas_checkout.py               # camino feliz + 4 fallas simuladas (E0-E4), ~1 min
+python backend/scripts/prueba_fallas_checkout.py --caida-real  # + caída real de Elasticsearch (E5): la detiene y la vuelve a levantar, ~2-3 min
 python backend/scripts/prueba_buscador.py --caida-real         # evidencia del buscador
 ```
+
+Cada verificación imprime `[OK  ]` o `[FALLA]`. Al final debe decir `RESUMEN: 45/45 verificaciones correctas` y `RESULTADO: PASS` (con `--caida-real`; sin esa opción son menos verificaciones). Compra como `maria.torres@email.com` y usa productos con stock de 30 o más. Si algo sale `[FALLA]`, revisa primero que el backend esté corriendo y que el flag esté en el `.env`.
+
+**Forma 2: a mano desde el navegador.**
+1. Abre `http://localhost:5173`, inicia sesión como `maria.torres@email.com` (contraseña `Tiendaya123!`) y agrega uno o dos productos al carrito.
+2. Ve a pagar. Debajo del formulario aparece el cuadro **Simular falla (solo desarrollo)**. Si no aparece, el flag no está activo o no reiniciaste el backend.
+3. Elige una falla, confirma el pago y compara con lo esperado:
+
+| Opción del selector | Qué deberías ver |
+|---|---|
+| Redis no responde al leer el carrito | Error "No se realizó ningún cobro". No hay pedido nuevo y el carrito sigue igual. |
+| PostgreSQL se cae antes del COMMIT | Error "No pudimos confirmar tu pago. No se realizó ningún cobro". No hay pedido, el stock no cambia y, si había una oferta relámpago, la reserva se libera. Vuelve a pagar con **Sin falla** y la compra sí pasa. |
+| Redis no responde después de confirmar | La compra **sí** se confirma. El carrito puede seguir mostrando lo comprado unos segundos, hasta que el relevo lo limpia. Si intentas pagar otra vez, no se cobra doble. |
+| MongoDB no responde al copiar el stock | La compra se confirma. En Compass, el stock del producto en MongoDB queda viejo y en unos 15-30 s el relevo lo corrige solo. |
+| Elasticsearch no responde al copiar el stock | La compra se confirma. El stock en Elasticsearch (Kibana) se corrige solo en unos 15-30 s. |
+
+4. Para ver la cola de reintentos, entra como `admin@tiendaya.com` a `http://localhost:5173/admin/sincronizacion`: ahí aparecen los eventos pendientes, con su error, y cómo pasan a *procesado*.
+
+Para simular una caída **real** sin el script: `docker compose stop elasticsearch`, haz una compra (funciona igual, pero el buscador muestra que no está disponible), luego `docker compose start elasticsearch` y en menos de un minuto el stock queda al día.
 
 Qué se prueba y qué resultado se espera: [`docs/estrategia-consistencia-checkout.md`](docs/estrategia-consistencia-checkout.md) (sección 7).
 
