@@ -45,7 +45,7 @@ function onBuscar(texto) {
     </main>
 
     <footer class="border-t border-neutral-200 bg-white text-neutral-400 text-xs py-6 text-center tracking-wide">
-      TiendaYa · Portal E-Commerce con arquitectura políglota (PostgreSQL · MongoDB · Redis · Neo4j · Elasticsearch)
+      TiendaYa · Portal E-Commerce con arquitectura políglota (PostgreSQL · MongoDB · Redis · Neo4j · Elasticsearch · pgvector)
     </footer>
   </div>
 </template>

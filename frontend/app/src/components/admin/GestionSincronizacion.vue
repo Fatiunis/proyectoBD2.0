@@ -17,6 +17,7 @@ const ETIQUETAS_TIPO = {
   stock_mongo: "Copiar stock a MongoDB",
   stock_elasticsearch: "Copiar stock a Elasticsearch",
   indexar_producto: "Reindexar producto (Elasticsearch)",
+  embedding_producto: "Recalcular embedding (pgvector)",
 };
 const ESTILO_ESTADO = {
   pendiente: "bg-amber-100 text-amber-800",
@@ -26,6 +27,9 @@ const ESTILO_ESTADO = {
 
 const resumen = ref({ pendiente: 0, procesado: 0, fallido: 0 });
 const eventos = ref([]);
+// Cobertura del componente vectorial (entrega final): cuántos productos del
+// catálogo tienen embedding en pgvector. null = no respondió.
+const vectores = ref(null);
 const filtroEstado = ref("");
 const cargando = ref(true);
 const trabajando = ref(false);
@@ -46,6 +50,8 @@ async function cargar() {
   }
   resumen.value = data.resumen;
   eventos.value = data.eventos;
+  const est = await apiFetch("/vectores/estado");
+  vectores.value = est.ok ? est.data : null;
 }
 
 async function accion(ruta, mensajeExito) {
@@ -78,8 +84,19 @@ onUnmounted(() => clearInterval(intervalo));
   <div>
     <h2 class="text-2xl font-extrabold text-neutral-950 tracking-tight mb-1">Sincronización del checkout</h2>
     <p class="text-sm text-neutral-500 mb-6 max-w-3xl">
-      Trabajo pendiente en Redis, MongoDB y Elasticsearch después de confirmar un pedido en PostgreSQL (outbox).
-      Si un motor falla, el evento queda pendiente y se reintenta solo con espera creciente; el pedido ya es válido.
+      Trabajo pendiente en Redis, MongoDB, Elasticsearch y pgvector después de confirmar un pedido en PostgreSQL
+      o de editar un producto (outbox). Si un motor falla, el evento queda pendiente y se reintenta solo con espera
+      creciente; el pedido o el producto ya son válidos.
+    </p>
+
+    <p class="text-xs text-neutral-500 mb-6">
+      <span class="font-semibold text-neutral-700">Componente vectorial:</span>
+      <template v-if="vectores">
+        {{ vectores.total }} de {{ vectores.productos_catalogo }} productos con embedding
+        <span v-if="vectores.total === vectores.productos_catalogo" class="text-accent-700 font-semibold">· al día</span>
+        <span v-else class="text-amber-700 font-semibold">· faltan {{ vectores.productos_catalogo - vectores.total }}</span>
+      </template>
+      <span v-else class="text-red-700 font-semibold">no responde (las recomendaciones se ocultan)</span>
     </p>
 
     <div class="grid grid-cols-3 gap-4 mb-6 max-w-2xl">

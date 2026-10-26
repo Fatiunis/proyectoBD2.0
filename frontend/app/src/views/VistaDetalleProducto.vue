@@ -9,6 +9,7 @@ import NavPublica from "../components/publico/NavPublica.vue";
 import ImagenProducto from "../components/ImagenProducto.vue";
 import OfertaLimitada from "../components/publico/OfertaLimitada.vue";
 import ResenasProducto from "../components/publico/ResenasProducto.vue";
+import ProductosSemanticos from "../components/publico/ProductosSemanticos.vue";
 import { porcentajeDescuento } from "../utils/descuento";
 import { formatoCuentaRegresiva } from "../utils/tiempo";
 
@@ -217,11 +218,19 @@ function onBuscar(texto) {
         </div>
       </div>
 
+      <ProductosSemanticos
+        v-if="producto"
+        :producto-id="producto._id"
+        titulo="Productos relacionados"
+        subtitulo="Parecidos por lo que dice su descripción (similitud semántica)."
+        class="border-t border-neutral-200 mt-10"
+      />
+
       <ResenasProducto v-if="producto" :producto-id="producto._id" class="border-t border-neutral-200" />
     </main>
 
     <footer class="border-t border-neutral-200 bg-white text-neutral-400 text-xs py-6 text-center tracking-wide">
-      TiendaYa · Portal E-Commerce con arquitectura políglota (PostgreSQL + MongoDB)
+      TiendaYa · Portal E-Commerce con arquitectura políglota (PostgreSQL · MongoDB · Redis · Neo4j · Elasticsearch · pgvector)
     </footer>
   </div>
 </template>

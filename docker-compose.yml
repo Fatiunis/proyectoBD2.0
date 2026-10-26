@@ -1,11 +1,41 @@
 services:
+  # Control de acceso (entrega final): Redis arranca con la lista de usuarios
+  # de database/redis/users.acl. El usuario "default" queda deshabilitado, así
+  # que toda conexión necesita usuario y contraseña (ver REDIS_URL en .env) y
+  # cada servicio solo puede tocar sus keys y comandos. Detalle:
+  # docs/decisiones/ADR-009-control-acceso-redis.md
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+      - ./database/redis/users.acl:/usr/local/etc/redis/users.acl:ro
+    command: redis-server --appendonly yes --aclfile /usr/local/etc/redis/users.acl
+
+  # Componente vectorial (entrega final): PostgreSQL + extensión pgvector,
+  # dedicado a los embeddings de las descripciones de producto (recomendación
+  # y búsqueda semántica). Es una instancia aparte del PostgreSQL transaccional
+  # (que cada quien tiene instalado localmente en el 5432), por eso usa el 5433.
+  # Al crearse el volumen por primera vez ejecuta database/vectores/*.sql
+  # (extensión, tabla, índice HNSW y roles). Detalle:
+  # docs/decisiones/ADR-008-componente-vectorial.md
+  vectores:
+    image: pgvector/pgvector:0.8.1-pg17
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_DB=tiendaya_vectores
+      - POSTGRES_USER=vectores_admin
+      - POSTGRES_PASSWORD=vectores_admin_2026
+    volumes:
+      - vectores_data:/var/lib/postgresql/data
+      - ./database/vectores:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vectores_admin -d tiendaya_vectores"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   neo4j:
     image: neo4j:5-community
@@ -52,7 +82,11 @@ services:
     environment:
       - RI_REDIS_HOST=redis
       - RI_REDIS_PORT=6379
-      - RI_REDIS_ALIAS=TiendaYa (Redis)
+      - RI_REDIS_ALIAS=TiendaYa (Redis, solo lectura)
+      # Visor con el usuario de solo lectura (users.acl): puede mirar todas las
+      # keys pero no escribir ni borrar nada.
+      - RI_REDIS_USERNAME=tiendaya_lectura
+      - RI_REDIS_PASSWORD=lectura_tiendaya_2026
     volumes:
       - redisinsight_data:/data
     depends_on:
@@ -75,3 +109,4 @@ volumes:
   neo4j_data:
   elasticsearch_data:
   redisinsight_data:
+  vectores_data:

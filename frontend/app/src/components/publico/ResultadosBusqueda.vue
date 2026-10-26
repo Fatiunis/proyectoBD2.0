@@ -3,6 +3,7 @@ import { ref, reactive, computed, watch, onMounted } from "vue";
 import { apiFetch } from "../../services/api";
 import TarjetaProducto from "./TarjetaProducto.vue";
 import Paginacion from "../comunes/Paginacion.vue";
+import ProductosSemanticos from "./ProductosSemanticos.vue";
 
 // Resultados de búsqueda (Entrega 3). Fuente: GET /api/busqueda (Elasticsearch):
 // relevancia, tolerancia a errores, "¿quisiste decir?" y facetas calculadas con
@@ -37,6 +38,11 @@ const contenedor = ref(null);
 let consultaVigente = 0;
 
 const hayFiltros = computed(() => Object.values(filtros).some((v) => v !== null));
+
+// Búsqueda por significado (entrega final, pgvector): complementa al buscador
+// léxico en la primera página y sin filtros. Brilla cuando la frase no comparte
+// palabras con el catálogo ("regalo para alguien que ama la música").
+const mostrarSemantica = computed(() => pagina.value === 1 && !hayFiltros.value);
 
 function parametros() {
   const p = new URLSearchParams({ q: props.busqueda, orden: orden.value, pagina: pagina.value, por_pagina: POR_PAGINA });
@@ -203,6 +209,14 @@ function claseOpcion(activa) {
         <p v-if="!error && sugerencia" class="text-sm mt-2">Prueba con <button @click="emit('buscar', sugerencia)" class="font-semibold text-accent hover:underline">{{ sugerencia }}</button>.</p>
       </div>
       <Paginacion :total="total" :pagina="pagina" :por-pagina="POR_PAGINA" @cambiar-pagina="onCambiarPagina" />
+
+      <ProductosSemanticos
+        v-if="mostrarSemantica"
+        :consulta="busqueda"
+        :titulo="productos.length || cargando ? 'También podría interesarte' : 'Productos por significado'"
+        subtitulo="Resultados por el sentido de tu búsqueda, aunque no compartan las mismas palabras."
+        class="border-t border-neutral-200 mt-6"
+      />
     </div>
   </section>
 </template>

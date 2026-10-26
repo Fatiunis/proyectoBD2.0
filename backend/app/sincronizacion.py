@@ -34,9 +34,9 @@ import time
 from datetime import datetime, timedelta
 
 from .config import OUTBOX_INTERVALO_SEGUNDOS, OUTBOX_MAX_INTENTOS
-from .extensions import db, redis_client, col_productos, ZONA_GUATEMALA
+from .extensions import db, redis_relevo, col_productos, ZONA_GUATEMALA
 from .models import EventoSincronizacion, Inventario
-from . import busqueda_es, ofertas_redis
+from . import busqueda_es, ofertas_redis, vectores
 
 TIPOS = (
     "confirmar_reserva_oferta",
@@ -44,6 +44,7 @@ TIPOS = (
     "stock_mongo",
     "stock_elasticsearch",
     "indexar_producto",
+    "embedding_producto",
 )
 
 ESPERA_BASE_SEGUNDOS = 5
@@ -51,7 +52,7 @@ ESPERA_MAXIMA_SEGUNDOS = 300
 
 with open(os.path.join(os.path.dirname(__file__), "lua", "limpiar_carrito_comprado.lua"), "r", encoding="utf-8") as _f:
     # register_script usa EVALSHA y recarga el script solo si Redis lo perdió.
-    _limpiar_carrito_lua = redis_client.register_script(_f.read())
+    _limpiar_carrito_lua = redis_relevo.register_script(_f.read())
 
 
 class FallaSimulada(Exception):
@@ -101,7 +102,8 @@ def _stock_actual(id_sql_origen):
 def _ejecutar(evento):
     p = evento.payload
     if evento.tipo == "confirmar_reserva_oferta":
-        ofertas_redis.confirmar(p["id_usuario"], {"producto_id": p["producto_id"], "id_oferta": p["id_oferta"]})
+        ofertas_redis.confirmar(p["id_usuario"], {"producto_id": p["producto_id"], "id_oferta": p["id_oferta"]},
+                               cliente=redis_relevo)
     elif evento.tipo == "limpiar_carrito":
         pares = [x for campo, valor in p["lineas"].items() for x in (campo, valor)]
         if pares:
@@ -115,6 +117,10 @@ def _ejecutar(evento):
         doc = col_productos.find_one({"_id": p["producto_id"]})
         if doc is not None:
             busqueda_es.indexar_producto(doc)
+    elif evento.tipo == "embedding_producto":
+        doc = col_productos.find_one({"_id": p["producto_id"]})
+        if doc is not None:
+            vectores.guardar_embedding_producto(doc)
     else:
         raise ValueError(f"Tipo de evento desconocido: {evento.tipo}")
 

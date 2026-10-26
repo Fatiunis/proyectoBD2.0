@@ -4,12 +4,56 @@ Portal de comercio electrónico con arquitectura de datos políglota (proyecto d
 
 - **PostgreSQL**: usuarios/autenticación, direcciones, categorías, pedidos, líneas de pedido, pagos, inventario, y el procedimiento transaccional de checkout.
 - **MongoDB**: catálogo de productos (atributos polimórficos por categoría), historial de cambios (event sourcing) y reseñas de producto.
-- **Redis**: carrito de compra (expiración por inactividad configurable con `CARRITO_TTL_SEGUNDOS`; por defecto, desde el 2026-10-07, no expira) y la oferta de inventario limitado (reserva atómica, sin sobreventa bajo concurrencia).
+- **Redis**: carrito de compra (expiración por inactividad configurable con `CARRITO_TTL_SEGUNDOS`; por defecto, desde el 2026-10-07, no expira) y la oferta de inventario limitado (reserva atómica, sin sobreventa bajo concurrencia). Con **control de acceso** (ACL): un usuario por servicio y sin acceso anónimo ([ADR-009](docs/decisiones/ADR-009-control-acceso-redis.md)).
 - **Neo4j**: grafo de reseñas para detectar fraude (cuentas que se califican entre sí de forma reiterada sobre los mismos productos).
 - **Elasticsearch**: buscador del catálogo (tolerancia a errores de tipeo, sinónimos, autocompletado, relevancia y filtros facetados), alimentado desde MongoDB.
-- **Consistencia del checkout**: una transacción en PostgreSQL con clave de idempotencia y un *outbox* de eventos que se reintentan hacia Redis, MongoDB y Elasticsearch ([estrategia](docs/estrategia-consistencia-checkout.md)).
+- **PostgreSQL + pgvector** (contenedor aparte, puerto 5433): embeddings de las descripciones de producto para **productos relacionados** y **búsqueda semántica** ([ADR-008](docs/decisiones/ADR-008-componente-vectorial.md)).
+- **Consistencia del checkout**: una transacción en PostgreSQL con clave de idempotencia y un *outbox* de eventos que se reintentan hacia Redis, MongoDB, Elasticsearch y pgvector ([estrategia](docs/estrategia-consistencia-checkout.md)).
 - **Backend**: Flask con application factory (`backend/main.py` → `backend/app/create_app()`), organizado en **Blueprints** por dominio y **SQLAlchemy** para todo el acceso a PostgreSQL. Expone una API REST consumida por el frontend.
-- **Frontend**: **Vue 3 + Vite + Tailwind v4** (`frontend/app/`) — sitio público (catálogo paginado, carrito, checkout, reseñas, oferta límite, página de ofertas flash, "Mi cuenta" del comprador, buscador con facetas) y panel admin (catálogo, categorías, usuarios, ventas, ofertas flash del vendedor, historial, fraude, sincronización).
+- **Frontend**: **Vue 3 + Vite + Tailwind v4** (`frontend/app/`) — sitio público (catálogo paginado, carrito, checkout, reseñas, oferta límite, productos relacionados, página de ofertas flash, "Mi cuenta" del comprador, buscador con facetas) y panel admin (catálogo, categorías, usuarios, ventas, ofertas flash del vendedor, historial, fraude, sincronización).
+
+**Documentos de la entrega final:** [informe](docs/informe-entrega-final.md) · [diagrama de arquitectura final](docs/arquitectura-final.html) (ábrelo en el navegador) · [retrospectiva](docs/retrospectiva.md) · [guion de la presentación](docs/guion-presentacion-final.md).
+
+## Novedades de la entrega final (léelo si ya tenías el proyecto montado)
+
+Dos componentes nuevos: **recomendación semántica con pgvector** y **control de acceso en Redis**. Si ya tenías TiendaYa corriendo de la Entrega 3, haz esto **en orden** (si es tu primera instalación, sigue directamente la [Instalación](#instalación)):
+
+1. **`git pull`**.
+2. **Instala la dependencia nueva** (con el venv activado): `pip install -r requirements.txt`. Agrega `sentence-transformers`, que trae PyTorch: son unos 550 MB y tarda unos minutos. En **Linux** instala antes la versión CPU de PyTorch, porque la de PyPI trae CUDA y pesa varios GB: `pip install torch --index-url https://download.pytorch.org/whl/cpu`. En Windows y macOS no hace falta.
+3. **Actualiza tu `.env`**. Sin esto el backend **no conecta a Redis** (responde `NOAUTH`). Lo más simple es copiar las líneas nuevas de `.env.example`:
+   ```
+   REDIS_URL=redis://tiendaya_api:api_tiendaya_2026@localhost:6379/0
+   REDIS_URL_RELEVO=redis://tiendaya_relevo:relevo_tiendaya_2026@localhost:6379/0
+   REDIS_URL_ADMIN=redis://tiendaya_admin:admin_tiendaya_2026@localhost:6379/0
+   VECTORES_URL=postgresql+psycopg2://vectores_app:vectores_app_2026@localhost:5433/tiendaya_vectores
+   MODELO_EMBEDDINGS=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+   ```
+   (`REDIS_URL` ya existía: **reemplázala**, no la dupliques.)
+4. **Levanta los contenedores**: `docker compose up -d`. Redis se recrea con el archivo de usuarios (`database/redis/users.acl`) sin perder datos, y aparece un servicio nuevo, `vectores` (PostgreSQL + pgvector), que la primera vez descarga la imagen (~150 MB) y crea solo su tabla, su índice y sus roles.
+5. **Aplica la migración** del outbox en tu PostgreSQL local (agrega el tipo de evento `embedding_producto`; no toca datos y se puede repetir):
+   ```bash
+   psql -U postgres -d tiendaya_db -f database/postgres/migracion_entrega_final_vectores.sql
+   ```
+   (sin `psql`, usa el atajo de Python del [paso 3](#3-crear-la-base-de-datos-y-cargar-el-esquema-postgresql) cambiando la ruta del archivo).
+6. **Genera los embeddings** del catálogo (la primera vez descarga el modelo, ~460 MB; después tarda unos 10 s):
+   ```bash
+   python database/migrations/generar_embeddings_productos.py
+   ```
+   Debe terminar con `pgvector: 1019 embeddings` (o la cantidad de productos de tu Mongo).
+7. **Reinicia el backend** (`python backend/main.py`) y Vite (`npm run dev` en `frontend/app/`).
+8. **Comprueba** que todo quedó bien:
+   ```bash
+   python backend/scripts/prueba_control_acceso_redis.py      # 37/37 PASS
+   python backend/scripts/prueba_recomendacion.py             # 16/16 PASS (con el backend andando)
+   ```
+
+Qué se construyó:
+- **Productos relacionados** en la página de cada producto: 6 productos parecidos por el significado de su nombre, categoría y descripción, con su "% afín". Se descartan variantes casi idénticas (la misma laptop con otra RAM) para que la franja muestre productos distintos. Endpoint: `GET /api/productos/<id>/relacionados?limite=6` (`&misma_categoria=1` para restringir a la categoría, `&diversificar=0` para ver los vecinos sin filtrar).
+- **Búsqueda por significado** en la página de resultados: debajo de los resultados del buscador aparece "También podría interesarte" (o "Productos por significado" si Elasticsearch no encontró nada). Encuentra, por ejemplo, audífonos para "regalo para alguien que ama la música" aunque ninguna palabra coincida. Endpoint: `GET /api/busqueda/semantica?q=...&limite=12`.
+- **Panel admin → Sincronización** muestra cuántos productos tienen embedding y el tipo de evento nuevo "Recalcular embedding (pgvector)". Al guardar un producto en el admin, su embedding se recalcula solo (si cambió el texto); si pgvector está caído, queda pendiente en el outbox.
+- **Redis con usuarios**: ya no acepta conexiones sin contraseña. La API entra como `tiendaya_api`, el relevo del outbox como `tiendaya_relevo` (solo puede leer y borrar líneas de carritos y reservas) y RedisInsight como `tiendaya_lectura` (solo lectura). Tabla completa en [Credenciales de los componentes](#credenciales-de-los-componentes).
+- Para usar `redis-cli` ahora hay que dar usuario: `docker compose exec redis redis-cli --user tiendaya_admin --pass admin_tiendaya_2026` (los comandos de `redis-cli` de documentos anteriores, como el informe de la Entrega 2, siguen valiendo agregando esas dos opciones).
+- Si el contenedor `vectores` no está corriendo, el portal funciona igual: solo desaparecen las franjas de recomendaciones.
 
 ## Novedades: detección de fraude ampliada (2026-10-07)
 
@@ -157,6 +201,8 @@ Qué se construyó, en concreto:
 
 **Detección de fraude ampliada (2026-10-07)** — cuatro patrones nuevos sobre el grafo de Neo4j (`cuenta_rafaga`, `grupo_coordinado`, `sesgo_vendedor_sin_compra` y `cuentas_vinculadas`), con puntaje de riesgo, resumen por cuenta y panel con pestañas; la consulta de anillos de la Entrega 2 sigue igual. Prueba automática 59/59 y verificación final del agente de pruebas en [`docs/hallazgos.md`](docs/hallazgos.md) ("Verificación del fraude ampliado"). Ver "Novedades: detección de fraude ampliada" arriba y [`docs/deteccion-fraude-ampliada.md`](docs/deteccion-fraude-ampliada.md).
 
+**Entrega final** — completa: recomendación de productos y búsqueda semántica con PostgreSQL + pgvector ([ADR-008](docs/decisiones/ADR-008-componente-vectorial.md)), control de acceso en Redis con un usuario por servicio ([ADR-009](docs/decisiones/ADR-009-control-acceso-redis.md)), [diagrama de arquitectura final](docs/arquitectura-final.html) y [retrospectiva](docs/retrospectiva.md). Evidencia: [`prueba_recomendacion.txt`](docs/evidencia/prueba_recomendacion.txt) (20/20) y [`prueba_control_acceso_redis.txt`](docs/evidencia/prueba_control_acceso_redis.txt) (37/37). Informe en [`docs/informe-entrega-final.md`](docs/informe-entrega-final.md).
+
 **Informe de la Entrega 1:** [`docs/Entrega 1 Base de Datos 2 (1).pdf`](<docs/Entrega 1 Base de Datos 2 (1).pdf>) (diagrama entidad-relación, justificación de la normalización y decisiones de embeber/referenciar).
 
 **Hallazgos de las pruebas:** los errores y pendientes que encontramos al probar (con su estado, cómo reproducirlos y la corrección propuesta) se registran en [`docs/hallazgos.md`](docs/hallazgos.md). Revísalo antes de reportar un error, por si ya está anotado.
@@ -167,7 +213,9 @@ Qué se construyó, en concreto:
 - El checkout opera sobre `productos`/`inventario` de PostgreSQL, no sobre MongoDB. Del catálogo, solo el **stock** se sincroniza entre los motores (tras una compra, por el outbox con reintentos; al editarlo en el admin, de mejor esfuerzo). El resto de lo que se edita desde el admin (**precio**, nombre, descripción, atributos) queda solo en Mongo y Elasticsearch: el checkout sigue cobrando el precio de Postgres.
 - El stock que muestran el catálogo y el buscador puede tener unos segundos de atraso si MongoDB o Elasticsearch fallaron después de una compra (consistencia eventual; el relevo lo corrige solo). El checkout nunca vende de más por eso, porque valida contra PostgreSQL.
 - El relevo del outbox es un hilo dentro del backend: si Flask está detenido, nadie reintenta (los eventos quedan guardados y se procesan al volver). Un evento que falla 10 veces queda `fallido` y se vuelve a encolar desde el panel admin → Sincronización.
-- Elasticsearch y Redis corren sin autenticación, y Neo4j solo con su usuario por defecto (el control de acceso es tema de la entrega final).
+- Control de acceso: Redis exige usuario por servicio (ACL) y pgvector usa roles; **Elasticsearch y MongoDB siguen sin autenticación** y Neo4j tiene un solo usuario (Community no tiene roles). En la API, el rol (`rol_solicitante`) lo manda el navegador y no se verifica con un token: es la principal deuda señalada en la [retrospectiva](docs/retrospectiva.md).
+- La búsqueda semántica usa un modelo pequeño que corre en CPU: acierta la categoría en 6 de 8 frases de prueba; por ejemplo, "fragancia elegante para una cena" devuelve cuchillos ([H-027](docs/hallazgos.md)). Por eso complementa al buscador de Elasticsearch, no lo reemplaza.
+- Un producto editado en el admin se recomienda con su texto nuevo apenas se guarda; si pgvector estaba caído, con el texto anterior hasta que el relevo procese el evento `embedding_producto`.
 - La oferta de inventario limitado (cupo, precio y reservas) vive en Redis. Es un cupo aparte del inventario real, pero al confirmar la compra las unidades vendidas en oferta **sí** se descuentan del `inventario` de PostgreSQL, igual que una compra normal.
 - El precio de oferta se valida al crearla contra el `precio_base` de MongoDB, y en el checkout contra el de PostgreSQL. Si un producto se editó solo en Mongo y los dos precios no coinciden, una oferta que se creó sin problema puede fallar al pagar. En ese caso el checkout devuelve las unidades a la oferta.
 - Con el valor por defecto (`CARRITO_TTL_SEGUNDOS=0`) el carrito no expira, así que los carritos abandonados no se borran solos y ocupan memoria en Redis. Para que expiren por inactividad hay que poner un valor mayor que 0 en el `.env` ([ADR-006](docs/decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md)). Las reservas de oferta del carrito sí vencen siempre.
@@ -181,14 +229,15 @@ Qué se construyó, en concreto:
 - PostgreSQL corriendo localmente (o accesible por red)
 - MongoDB corriendo localmente (o accesible por red)
 - Node.js `^20.19.0` o `>=22.12.0` + npm (requerido por Vite para levantar el frontend)
-- **Docker + Docker Compose** (para levantar Redis, Neo4j y Elasticsearch). Elasticsearch usa unos 1-1.5 GB de RAM (heap de 512 MB más la propia JVM)
+- **Docker + Docker Compose** (para levantar Redis, Neo4j, Elasticsearch y PostgreSQL + pgvector). Elasticsearch usa unos 1-1.5 GB de RAM (heap de 512 MB más la propia JVM)
+- Unos **1.5 GB libres en disco** para PyTorch (~550 MB en el venv) y el modelo de embeddings (~460 MB, se descarga solo la primera vez a la caché de Hugging Face)
 
 ## Arranque diario (después de apagar o reiniciar la computadora)
 
 Esto es para cuando el proyecto **ya está instalado** (si es la primera vez, sigue la [Instalación](#instalación)). Los datos no se pierden al apagar: PostgreSQL y MongoDB los guardan en disco, y Redis, Neo4j y Elasticsearch, en volúmenes de Docker. Solo hay que volver a encender los servicios, en este orden:
 
 1. **Abre Docker Desktop** y espera a que diga *Engine running* (abajo a la izquierda). PostgreSQL y MongoDB, si los instalaste como servicios de Windows, arrancan solos con la computadora.
-2. **Levanta Redis, Neo4j y Elasticsearch.** Abre una terminal en la carpeta del proyecto:
+2. **Levanta Redis, Neo4j, Elasticsearch y pgvector.** Abre una terminal en la carpeta del proyecto:
    ```bash
    docker compose up -d
    ```
@@ -213,6 +262,8 @@ Esto es para cuando el proyecto **ya está instalado** (si es la primera vez, si
 - PostgreSQL o MongoDB no conectan: en Windows, abre *Servicios* (`services.msc`) y verifica que `postgresql-x64-18` y `MongoDB` estén *En ejecución*.
 - El buscador muestra "búsqueda simplificada": Elasticsearch todavía está arrancando o no tiene el índice. Espera un poco y, si sigue igual, corre `python database/migrations/indexar_productos_elasticsearch.py`.
 - El carrito, las ofertas o el panel de fraude dan error (en la consola del backend aparece un error de Redis o Neo4j): los contenedores no están corriendo. Revisa con `docker compose ps` y corre `docker compose up -d`. No hace falta reiniciar el backend: se reconecta solo.
+- En la consola del backend aparece `NOAUTH Authentication required` o `WRONGPASS`: tu `.env` tiene el `REDIS_URL` viejo, sin usuario. Cópialo de `.env.example` (ver [Novedades de la entrega final](#novedades-de-la-entrega-final-léelo-si-ya-tenías-el-proyecto-montado)) y reinicia el backend.
+- No aparecen los "Productos relacionados": el contenedor `vectores` no está corriendo (`docker compose up -d`) o faltan los embeddings (`python database/migrations/generar_embeddings_productos.py`). El panel admin → Sincronización dice cuántos productos tienen embedding.
 
 ## Instalación
 
@@ -229,6 +280,8 @@ source venv/bin/activate
 
 pip install -r requirements.txt
 ```
+
+`requirements.txt` incluye `sentence-transformers` (recomendación semántica, entrega final), que instala PyTorch: la descarga es de unos 550 MB. En **Linux**, instala primero la versión CPU de PyTorch (la de PyPI trae CUDA y pesa varios GB): `pip install torch --index-url https://download.pytorch.org/whl/cpu`, y después `pip install -r requirements.txt`. En Windows y macOS no hace falta.
 
 ### 2. Variables de entorno
 
@@ -249,7 +302,10 @@ MONGO_URI=mongodb://localhost:27017/
 # Solo la leen dos scripts de database/migrations/; el backend usa siempre "tiendaya_nosql" (backend/app/extensions.py)
 MONGO_DB_NAME=tiendaya_nosql
 
-REDIS_URL=redis://localhost:6379/0
+# Redis exige usuario: cada servicio usa el suyo (database/redis/users.acl)
+REDIS_URL=redis://tiendaya_api:api_tiendaya_2026@localhost:6379/0
+REDIS_URL_RELEVO=redis://tiendaya_relevo:relevo_tiendaya_2026@localhost:6379/0
+REDIS_URL_ADMIN=redis://tiendaya_admin:admin_tiendaya_2026@localhost:6379/0
 # Segundos de inactividad tras los que expira un carrito (se renueva en cada operación).
 # 0 = el carrito no expira (valor por defecto); por ejemplo 1800 = 30 minutos
 CARRITO_TTL_SEGUNDOS=0
@@ -262,6 +318,11 @@ NEO4J_PASSWORD=tiendaya123
 
 ELASTICSEARCH_URL=http://localhost:9200
 ES_ALIAS_PRODUCTOS=productos
+
+# Componente vectorial (contenedor "vectores", puerto 5433) y modelo de embeddings
+VECTORES_URL=postgresql+psycopg2://vectores_app:vectores_app_2026@localhost:5433/tiendaya_vectores
+MODELO_EMBEDDINGS=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+
 # Cada cuántos segundos se reintentan los eventos pendientes del checkout, y cuántos intentos antes de marcarlos "fallido"
 OUTBOX_INTERVALO_SEGUNDOS=15
 OUTBOX_MAX_INTENTOS=10
@@ -305,6 +366,12 @@ Y la de la Entrega 3, que crea las tablas `checkout_idempotencia` y `eventos_sin
 
 ```bash
 psql -U postgres -d tiendaya_db -f database/postgres/migracion_entrega3_consistencia.sql
+```
+
+Y la de la entrega final, que agrega el tipo de evento `embedding_producto` al outbox. **Córrela también en una base nueva** (el DDL no la trae); no toca datos y se puede repetir:
+
+```bash
+psql -U postgres -d tiendaya_db -f database/postgres/migracion_entrega_final_vectores.sql
 ```
 
 Carga los 11 productos adicionales de la semilla (15 en total):
@@ -387,9 +454,10 @@ Desde la raíz del repo:
 docker compose up -d
 ```
 
-Levanta tres servicios:
+Levanta cuatro servicios:
 
-- **Redis** (puerto `6379`): carrito y oferta de inventario limitado.
+- **Redis** (puerto `6379`): carrito y oferta de inventario limitado. Arranca con los usuarios de `database/redis/users.acl`: sin usuario y contraseña no acepta ningún comando (ver [Credenciales de los componentes](#credenciales-de-los-componentes)).
+- **vectores** (puerto `5433`): PostgreSQL 17 + pgvector para los embeddings de productos. La primera vez ejecuta `database/vectores/01_esquema.sql` (extensión, tabla `producto_embedding`, índice HNSW y roles). Es independiente de tu PostgreSQL local del puerto 5432.
 - **Neo4j** (puertos `7474` browser / `7687` bolt, usuario `neo4j` / contraseña `tiendaya123`): detección de fraude en reseñas.
 - **Elasticsearch** (puerto `9200`): buscador del catálogo.
 
@@ -402,6 +470,14 @@ python database/migrations/indexar_productos_elasticsearch.py
 ```
 
 **Vuelve a correrlo** si cambias `database/elasticsearch/productos_indice.json` (mapping, sinónimos), si corres la migración completa de Mongo (sin `--incremental`) o si borras el volumen de Elasticsearch. Los productos que crees o edites desde el admin se indexan solos.
+
+Genera los embeddings del catálogo en pgvector (necesita el paso 4 hecho y el contenedor `vectores` arriba). La primera vez descarga el modelo de lenguaje (~460 MB); después, recalcula solo los productos cuyo texto cambió, así que es seguro repetirlo:
+
+```bash
+python database/migrations/generar_embeddings_productos.py
+```
+
+Termina con `pgvector: N embeddings`, donde N es la cantidad de productos de MongoDB (1019 con todas las semillas). **Vuelve a correrlo** si corres la migración completa de Mongo o si borras el volumen `vectores_data`; con `--forzar` recalcula todo (por ejemplo, si cambias `MODELO_EMBEDDINGS`). Los productos que crees o edites desde el admin se actualizan solos.
 
 Aplica las constraints de unicidad del grafo (una sola vez, seguro de repetir):
 
@@ -435,6 +511,18 @@ python backend/main.py
 ```
 
 Flask queda escuchando en `http://127.0.0.1:8000`. Internamente, `backend/main.py` llama a `create_app()` y arranca el **relevo del outbox**: un hilo que cada 15 s reintenta los eventos de sincronización pendientes del checkout. En la consola debe aparecer una sola vez `[relevo] Relevo de eventos de sincronización activo`. Las rutas viven organizadas por dominio en `backend/app/blueprints/` (ver la estructura más abajo o `docs/STACK.md` para el detalle completo).
+
+#### Probar la recomendación y el control de acceso (entrega final)
+
+Con el backend levantado:
+
+```bash
+python backend/scripts/prueba_recomendacion.py                # R1-R6: cobertura, relacionados, búsqueda semántica, índice, sincronización, permisos
+python backend/scripts/prueba_recomendacion.py --caida-real   # + R7: detiene y vuelve a levantar el contenedor vectores
+python backend/scripts/prueba_control_acceso_redis.py         # no necesita el backend: solo Redis
+```
+
+La primera verifica, entre otras cosas, que las recomendaciones son de la misma categoría o de una afín, que una frase sin palabras en común con el catálogo encuentra la categoría correcta (y qué devuelve Elasticsearch para la misma frase), y que los roles de pgvector no pueden hacer más de lo debido. La segunda se conecta a Redis como cada usuario y comprueba que puede lo suyo y recibe `NOPERM` en todo lo demás, incluso dentro de scripts Lua. Salidas guardadas en [`docs/evidencia/`](docs/evidencia/).
 
 #### Probar las fallas del checkout
 
@@ -504,7 +592,7 @@ El backend tiene CORS abierto a cualquier origen (`CORS(app)` en `backend/app/__
 
 ## Ver las bases de datos
 
-TiendaYa usa cinco bases. Con esta tabla puedes abrir cada una con una interfaz gráfica para ver qué guardó la aplicación:
+TiendaYa usa seis bases. Con esta tabla puedes abrir cada una con una interfaz gráfica para ver qué guardó la aplicación:
 
 | Base | Qué guarda | Herramienta | Dónde |
 |---|---|---|---|
@@ -513,6 +601,7 @@ TiendaYa usa cinco bases. Con esta tabla puedes abrir cada una con una interfaz 
 | **Redis** | Carritos y ofertas flash | **RedisInsight** (contenedor) | http://localhost:5540 |
 | **Neo4j** | Grafo de reseñas para fraude | **Neo4j Browser** (incluido en Neo4j) | http://localhost:7474 |
 | **Elasticsearch** | Índice del buscador | **Kibana** (contenedor) | http://localhost:5601 |
+| **pgvector** | Embeddings de los productos | **pgAdmin 4** (el mismo del PostgreSQL local) | `localhost:5433` |
 
 RedisInsight y Kibana están en el `docker-compose.yml` dentro del perfil **`visores`**, así que **no** arrancan con `docker compose up -d`. Levántalos cuando los necesites (con Redis y Elasticsearch ya corriendo):
 
@@ -554,11 +643,31 @@ Sin pgAdmin, también puedes usar `psql -U postgres -d tiendaya_db` en la termin
 
 ### Redis → RedisInsight (http://localhost:5540)
 
-1. La primera vez, acepta los términos de uso. La conexión **"TiendaYa (Redis)"** se crea sola al aceptarlos, porque viene configurada en el `docker-compose.yml`. Si no aparece, haz clic en **+ Add Redis database** y usa host **`redis`**, puerto `6379` y sin contraseña. No pongas `localhost`: RedisInsight corre en otro contenedor, y para él `localhost` es él mismo.
+1. La primera vez, acepta los términos de uso. La conexión **"TiendaYa (Redis, solo lectura)"** se crea sola al aceptarlos, porque viene configurada en el `docker-compose.yml` con el usuario `tiendaya_lectura`: puedes ver todo, pero no modificar ni borrar nada (es parte del control de acceso). Si no aparece, haz clic en **+ Add Redis database** y usa host **`redis`**, puerto `6379`, usuario `tiendaya_lectura` y contraseña `lectura_tiendaya_2026`. No pongas `localhost`: RedisInsight corre en otro contenedor, y para él `localhost` es él mismo. Si necesitas modificar algo a mano, crea otra conexión con `tiendaya_admin` / `admin_tiendaya_2026`.
+   - Si ya habías abierto RedisInsight antes de la entrega final, su conexión vieja (sin usuario) dará error de autenticación: bórrala y crea la nueva como se indica arriba.
 2. En **Browser** escribe un patrón en el buscador:
    - `carrito:*`: un hash por comprador (`carrito:<id_usuario>`). Cada campo es una línea del carrito.
    - `oferta:*`: las ofertas flash. `oferta:<producto>:stock` es el cupo sin vender; también están `:limite`, `:precio`, `:id` y el hash `:reservas`. La columna **TTL** muestra cuánto le queda a la oferta.
-3. Sin RedisInsight: `docker compose exec redis redis-cli`, y luego `SCAN 0 MATCH oferta:* COUNT 100`, `HGETALL carrito:4` o `TTL oferta:PROD-0001:stock`.
+3. Sin RedisInsight: `docker compose exec redis redis-cli --user tiendaya_lectura --pass lectura_tiendaya_2026` (o `tiendaya_admin` / `admin_tiendaya_2026` para escribir), y luego `SCAN 0 MATCH oferta:* COUNT 100`, `HGETALL carrito:4` o `TTL oferta:PROD-0001:stock`. Sin `--user`, Redis responde `NOAUTH`. `ACL LIST` (como admin) muestra los usuarios y sus permisos.
+
+### pgvector → pgAdmin 4 (localhost:5433)
+
+1. En pgAdmin, clic derecho en **Servers → Register → Server**. Nombre: `TiendaYa vectores`. En *Connection*: host `localhost`, puerto **`5433`**, base `tiendaya_vectores`, usuario `vectores_lector` y contraseña `vectores_lector_2026` (solo lectura; `vectores_admin` / `vectores_admin_2026` es el dueño del esquema).
+2. Tabla **`producto_embedding`**: un vector de 384 números por producto, con su categoría, si está activo, el hash del texto y el modelo con que se calculó.
+3. Consultas de ejemplo en el **Query Tool**:
+
+```sql
+-- Los 5 productos más parecidos a PROD-0001 (1 = idéntico)
+SELECT producto_id, round((1 - (embedding <=> (SELECT embedding FROM producto_embedding WHERE producto_id = 'PROD-0001')))::numeric, 3) AS similitud
+FROM producto_embedding WHERE producto_id <> 'PROD-0001'
+ORDER BY embedding <=> (SELECT embedding FROM producto_embedding WHERE producto_id = 'PROD-0001')
+LIMIT 5;
+
+-- Cuántos embeddings hay por categoría
+SELECT id_categoria, count(*) FROM producto_embedding GROUP BY 1 ORDER BY 2 DESC;
+```
+
+Los nombres de los productos no están aquí (están en MongoDB): busca el `producto_id` en Compass. Sin pgAdmin: `docker compose exec vectores psql -U vectores_admin -d tiendaya_vectores`.
 
 ### Neo4j → Neo4j Browser (http://localhost:7474)
 
@@ -659,6 +768,32 @@ Tras correr `database/postgres/datos_semilla_masivos.sql` (paso 3) hay **40 tien
 | Perfumería Esencia Zona 14 | ventas@perfumeriaesencia.com.gt | Perfumes | 11 |
 | Glow Beauty Store | hola@glowbeautygt.com | Cuidado de la Piel, Perfumes | 29 |
 
+## Credenciales de los componentes
+
+Son contraseñas **de desarrollo**, iguales para todo el equipo (están en `.env.example` y en `docker-compose.yml`). En un despliegue real irían en un gestor de secretos.
+
+**Redis** (control de acceso por ACL, archivo `database/redis/users.acl`, contraseñas guardadas como SHA-256; detalle en [ADR-009](docs/decisiones/ADR-009-control-acceso-redis.md)):
+
+| Usuario | Contraseña | Lo usa | Puede |
+|---|---|---|---|
+| `default` | — | nadie | **deshabilitado**: sin credenciales, Redis responde `NOAUTH` |
+| `tiendaya_api` | `api_tiendaya_2026` | la API (`REDIS_URL`) | keys `carrito:*` y `oferta:*`; solo los comandos que usa el código y scripts Lua. Sin `KEYS`, `FLUSHALL`, `CONFIG`, `ACL` |
+| `tiendaya_relevo` | `relevo_tiendaya_2026` | el relevo del outbox (`REDIS_URL_RELEVO`) | `HGET`/`HDEL` y scripts sobre `carrito:*` y `oferta:*:reservas`; nada más |
+| `tiendaya_lectura` | `lectura_tiendaya_2026` | RedisInsight | leer todas las keys; no escribe ni ejecuta scripts |
+| `tiendaya_admin` | `admin_tiendaya_2026` | operación y pruebas (`REDIS_URL_ADMIN`) | todo |
+
+Para cambiar una contraseña: calcula su SHA-256 (`python -c "import hashlib; print(hashlib.sha256(b'nueva').hexdigest())"`), reemplaza el `#<hash>` del usuario en `users.acl`, actualiza el `.env` de cada integrante y corre `docker compose restart redis`.
+
+**pgvector** (roles de PostgreSQL creados por `database/vectores/01_esquema.sql`):
+
+| Rol | Contraseña | Puede |
+|---|---|---|
+| `vectores_admin` | `vectores_admin_2026` | dueño de la base `tiendaya_vectores` (cambiar el esquema) |
+| `vectores_app` | `vectores_app_2026` | lo usan el backend y el script de embeddings: leer y escribir filas de `producto_embedding`; no puede crear ni borrar tablas |
+| `vectores_lector` | `vectores_lector_2026` | solo leer |
+
+**Neo4j:** `neo4j` / `tiendaya123`. **Elasticsearch y MongoDB:** sin autenticación (ver "Limitaciones conocidas").
+
 ## Estructura del repositorio
 
 ```
@@ -666,12 +801,13 @@ backend/
   main.py                    Entry point: create_app() + relevo del outbox (hilo) + app.run(..., threaded=True)
   app/
     __init__.py                 create_app(): Flask + CORS + registro de blueprints
-    config.py                    load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, NEO4J_URI, ELASTICSEARCH_URL, OUTBOX_*, PERMITIR_FALLAS_SIMULADAS
-    extensions.py                 db (SQLAlchemy), Mongo (col_productos, col_historial, col_resenas), redis_client, neo4j_driver, es_client
+    config.py                    load_dotenv(), PG_CONFIG, MONGO_URI, REDIS_URL, REDIS_URL_RELEVO, VECTORES_URI, MODELO_EMBEDDINGS, NEO4J_URI, ELASTICSEARCH_URL, OUTBOX_*, PERMITIR_FALLAS_SIMULADAS
+    extensions.py                 db (SQLAlchemy), Mongo (col_productos, col_historial, col_resenas), redis_client (usuario tiendaya_api), redis_relevo (usuario tiendaya_relevo), neo4j_driver, es_client
     models.py                      Modelos SQLAlchemy: Usuario, Direccion, Categoria, Producto, Inventario, Pedido, LineaPedido, CheckoutIdempotencia, EventoSincronizacion
     busqueda_es.py                Elasticsearch: documento del índice, indexar, búsqueda con facetas, autocompletado (Entrega 3)
     sincronizacion.py             Outbox del checkout: registrar y procesar eventos idempotentes + hilo de relevo (Entrega 3)
     ofertas_redis.py              Keys, carga de scripts Lua y wrappers de la oferta (compartido por ofertas, carrito y checkout); pids_con_oferta_activa (SCAN de oferta:*:id)
+    vectores.py                   pgvector: texto del producto, embeddings (modelo con carga perezosa), upsert por hash, vecinos por coseno y diversificación (entrega final)
     grafo_fraude.py               Sincronización en mejor esfuerzo del grafo de fraude ampliado: compra_verificada, clave normalizada de dirección, ENVIA_A (2026-10-07)
     lua/
       crear_oferta.lua               Crea cupo, límite, precio e id de la oferta en un solo paso (mismo TTL)
@@ -696,12 +832,15 @@ backend/
       carrito.py                        /api/carrito/<id_usuario> (Redis, Entrega 2; por defecto no expira, CARRITO_TTL_SEGUNDOS > 0 activa la expiración)
       ofertas.py                        /api/ofertas (POST crear; GET listado público de ofertas activas), /api/ofertas/<producto_id> (GET, DELETE), /api/ofertas/<producto_id>/reservar, /api/vendedores/<id>/ofertas (ofertas del vendedor) (precio de oferta + reserva de 1 min; Redis + Lua, Entrega 2)
       resenas.py                        /api/resenas (Mongo + sync a Neo4j, Entrega 2)
+      recomendaciones.py                /api/productos/<id>/relacionados, /api/busqueda/semantica, /api/vectores/estado (pgvector, entrega final)
       fraude.py                         /api/fraude/alertas (consulta Cypher de 3 saltos, Entrega 2)
                                         + /api/fraude/patrones, /api/fraude/alertas/<tipo>, /api/fraude/resumen (4 patrones, fraude ampliado, 2026-10-07)
   scripts/
     prueba_concurrencia_oferta.py  Evidencia de que la oferta límite no permite sobreventa bajo concurrencia
     prueba_fallas_checkout.py      Evidencia de la estrategia de consistencia: camino feliz + 4 fallas simuladas (E0-E4) + caída real de Elasticsearch (E5) (Entrega 3)
     prueba_buscador.py             Evidencia del buscador: errores de tipeo, sinónimos, autocompletado, facetas, respaldo (Entrega 3)
+    prueba_recomendacion.py        Evidencia de la recomendación y la búsqueda semántica: cobertura, calidad, índice, sincronización, roles y caída real (entrega final)
+    prueba_control_acceso_redis.py Evidencia del control de acceso en Redis: cada usuario ACL contra lo permitido y lo prohibido (37 verificaciones, entrega final)
     prueba_fraude_ampliado.py      Evidencia de la detección de fraude ampliada: positivos, controles, API original intacta, errores y sincronización (59 verificaciones, 2026-10-07)
 database/
   postgres/
@@ -711,6 +850,11 @@ database/
     datos_semilla_masivos.sql      Semilla masiva: 19 subcategorías + 40 tiendas + 1000 productos e inventario (generado, idempotente)
     migracion_sp_checkout_precio_oferta.sql  Actualiza sp_procesar_checkout en bases existentes (precio de oferta por línea)
     migracion_entrega3_consistencia.sql      Tablas checkout_idempotencia y eventos_sincronizacion (outbox) en bases existentes
+    migracion_entrega_final_vectores.sql     Agrega el evento embedding_producto al outbox (entrega final; correr también en bases nuevas)
+  redis/
+    users.acl                      Usuarios ACL de Redis por servicio (contraseñas como SHA-256; entrega final)
+  vectores/
+    01_esquema.sql                 pgvector: extensión, tabla producto_embedding, índice HNSW y roles (lo ejecuta el contenedor al crearse; entrega final)
   mongo/
     01_indexes.js                  Índices de referencia (la migración crea todos menos idx_activo_precio, ver paso 4)
     02_aggregation_queries.js      Consultas de agregación de referencia
@@ -727,11 +871,12 @@ database/
     sincronizar_grafo_fraude.py     Completa el grafo existente: Vendedor/VENDIDO_POR, CALIFICO.compra_verificada, Direccion/ENVIA_A (no destructivo, idempotente, 2026-10-07)
     sembrar_fraude_ampliado.py      Escenarios positivos y de control de los 4 patrones nuevos + 24 compradores @fraude-demo.tiendaya.gt (aditivo, idempotente, 2026-10-07)
     indexar_productos_elasticsearch.py  Indexa el catálogo de Mongo en un índice versionado y mueve el alias (Entrega 3)
+    generar_embeddings_productos.py     Calcula y guarda en pgvector los embeddings de todo el catálogo (idempotente, --forzar; entrega final)
 frontend/
   app/                        Sitio Vue 3 + Vite (único frontend, ver docs/STACK.md)
     src/
       views/                       VistaPublica.vue, VistaDetalleProducto.vue, VistaAdmin.vue
-      components/publico/           Catálogo, filtros, tarjeta de producto, carrito, checkout, login/registro, reseñas, oferta límite, PerfilComprador ("Mi cuenta"), ResultadosBusqueda (facetas), ofertas flash (OfertasFlash.vue, FranjaOfertasFlash.vue, TarjetaOfertaPublica.vue)
+      components/publico/           Catálogo, filtros, tarjeta de producto, carrito, checkout, login/registro, reseñas, oferta límite, PerfilComprador ("Mi cuenta"), ResultadosBusqueda (facetas), ProductosSemanticos (productos relacionados y búsqueda por significado, entrega final), ofertas flash (OfertasFlash.vue, FranjaOfertasFlash.vue, TarjetaOfertaPublica.vue)
       components/comunes/            Paginacion.vue (compartido por el catálogo público, el del admin, los resultados de búsqueda y el historial)
       components/admin/              Catálogo, categorías, usuarios, ventas, ofertas flash del vendedor (GestionOfertas.vue, FormularioOferta.vue, TarjetaOferta.vue), historial, fraude (GestionFraude.vue), sincronización (GestionSincronizacion.vue), ModalAdmin.vue (se cierra con Escape)
                                      + fraude ampliado (2026-10-07): ResumenFraude.vue, AnillosResenas.vue (consulta de la Entrega 2), AlertasPatron.vue, AlertaFraude.vue
@@ -741,18 +886,27 @@ frontend/
                                       + fraude.js (2026-10-07): niveles, etiquetas de patrones, umbrales y evidencia, mensajes de error del panel de fraude
 docs/
   STACK.md                   Bitácora técnica completa: qué cambió en cada fase, por qué, y qué se verificó
-  arquitectura.md            Diagrama de arquitectura actualizado (Entrega 3)
+  arquitectura.md            Diagrama de arquitectura final (Mermaid) y notas de consistencia
+  arquitectura-final.html    Diagrama de arquitectura final para abrir en el navegador: vista general, checkout, recomendación, matriz y control de acceso
+  arquitectura-entrega-3.html  Diagrama de la Entrega 3 (histórico)
+  retrospectiva.md           Qué decisiones de arquitectura se sostendrían y cuáles se replantearían (entrega final)
+  informe-entrega-final.md   Informe de la entrega final
+  guion-presentacion-final.md  Guion de la presentación final: bloques, demostración en vivo, plan B y preguntas probables
   estrategia-consistencia-checkout.md  Estrategia de consistencia del checkout: puntos de falla, mitigación y prueba de falla (Entrega 3)
   decisiones/
     ADR-002-grafos-vs-columnar.md   Registro de decisión: Neo4j para fraude en reseñas, columnar descartado por ahora
     ADR-003-redis-carrito-y-oferta.md  Registro de decisión: Redis para el carrito y la oferta de inventario limitado
     ADR-004-motor-de-busqueda.md       Registro de decisión: Elasticsearch para el buscador y diseño del mapping
     ADR-005-newsql-pagos.md            Evaluación NewSQL para pagos: no migrar, y cuándo sí
+    ADR-006-carrito-sin-expiracion-por-defecto.md  Registro de decisión: carrito sin expiración por defecto (2026-10-07)
     ADR-007-deteccion-fraude-ampliada.md  Registro de decisión: detección de fraude ampliada sobre el mismo grafo de Neo4j (2026-10-07)
+    ADR-008-componente-vectorial.md  Registro de decisión: PostgreSQL + pgvector en contenedor dedicado para la recomendación semántica (entrega final)
+    ADR-009-control-acceso-redis.md  Registro de decisión: control de acceso en Redis con un usuario ACL por servicio (entrega final)
   informe-entrega-2.md       Informe de la Entrega 2 (decisiones, evidencia y responsabilidades)
   informe-entrega-3.md       Informe de la Entrega 3 (buscador, consistencia, prueba de falla, NewSQL)
   evidencia/                 Salidas de las pruebas de la Entrega 3 (fallas del checkout y buscador)
                              + prueba_fraude_ampliado.txt (detección de fraude ampliada, 2026-10-07)
+                             + prueba_recomendacion.txt y prueba_control_acceso_redis.txt (entrega final)
   guia-prueba-fraude.md      Paso a paso para provocar y revisar una alerta de fraude, y limpiar los datos de prueba
   deteccion-fraude-ampliada.md  Detección de fraude ampliada: los 4 patrones, umbrales, puntajes, grafo y verificación (2026-10-07)
   guia-funcionalidades.docx  Guía en Word por funcionalidad: qué hace, de qué base saca los datos y en qué archivos está (actualizada al 2026-10-08)
@@ -760,7 +914,7 @@ docs/
   reporte-trabajo-entrega-3.md  Reporte detallado de todo lo trabajado en la Entrega 3
   guion-demostracion-entrega-3.md  Guion de la demostración en vivo: bloques por presentador, resultados esperados, plan B y preguntas probables
   hallazgos.md               Registro de hallazgos de las pruebas: errores y pendientes, con su estado y corrección
-docker-compose.yml          Redis + Neo4j (Entrega 2) + Elasticsearch (Entrega 3); perfil "visores": RedisInsight + Kibana
+docker-compose.yml          Redis con ACL + Neo4j (Entrega 2) + Elasticsearch (Entrega 3) + vectores: PostgreSQL + pgvector (entrega final); perfil "visores": RedisInsight (solo lectura) + Kibana
 requirements.txt
 .env.example
 ```

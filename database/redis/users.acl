@@ -1,0 +1,5 @@
+user default off resetpass ~* &* +@all
+user tiendaya_admin on #5b1641d9db5e8ffe07bed8569c8f27ee9a719bba126c4e05e87798dea21927f2 ~* &* +@all
+user tiendaya_api on #bb3893bcdb62fc0df3cdbc851b11e1ff1e61c888b769d18b5c95a69fc8f71014 resetkeys ~carrito:* ~oferta:* resetchannels -@all +ping +client|setinfo +get +set +exists +del +expire +pexpire +persist +ttl +pttl +incrby +decrby +hget +hset +hdel +hgetall +hkeys +hexists +scan +eval +evalsha +script|load +script|exists +time
+user tiendaya_relevo on #42a56be55ee402b06761560d860ba180df2aad7035d0a35b19cdb1773c472a1e resetkeys ~carrito:* ~oferta:*:reservas resetchannels -@all +ping +client|setinfo +hget +hdel +eval +evalsha +script|load +script|exists
+user tiendaya_lectura on #4d2560d5b90fd2f764f75f7580eace7990f148f1bdee798ae6313fe0bcb84c13 resetkeys %R~* resetchannels -@all +@read +@connection -@dangerous +info +select +dbsize +client|setinfo +client|setname +client|getname +client|id

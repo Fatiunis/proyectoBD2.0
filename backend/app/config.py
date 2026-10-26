@@ -17,7 +17,13 @@ PG_CONFIG = {
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+# Redis tiene control de acceso (ACL, entrega final): cada servicio se conecta
+# con su propio usuario (database/redis/users.acl). REDIS_URL es el de la API
+# web (tiendaya_api); REDIS_URL_RELEVO el del relevo del outbox
+# (tiendaya_relevo), que solo puede tocar carritos y reservas de oferta. Si
+# REDIS_URL_RELEVO no está definida se usa REDIS_URL.
+REDIS_URL = os.getenv("REDIS_URL", "redis://tiendaya_api:api_tiendaya_2026@localhost:6379/0")
+REDIS_URL_RELEVO = os.getenv("REDIS_URL_RELEVO") or REDIS_URL
 # Expiración del carrito por INACTIVIDAD, en segundos. 0 (o negativo) = el
 # carrito NO expira (default): cada lectura/escritura le quita el TTL que
 # pudiera tener (PERSIST). Un valor positivo reactiva la expiración: el TTL se
@@ -35,6 +41,17 @@ NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "tiendaya123")
 # índice nuevo y mueve el alias, así el buscador nunca ve un índice a medias.
 ELASTICSEARCH_URL = os.getenv("ELASTICSEARCH_URL", "http://localhost:9200")
 ES_ALIAS_PRODUCTOS = os.getenv("ES_ALIAS_PRODUCTOS", "productos")
+
+# Componente vectorial (entrega final): PostgreSQL + pgvector en el contenedor
+# "vectores" (puerto 5433, aparte del PostgreSQL transaccional). El backend se
+# conecta con el rol vectores_app, que solo puede leer y escribir filas de
+# producto_embedding (no cambiar el esquema). MODELO_EMBEDDINGS es el modelo de
+# sentence-transformers que convierte texto en vectores de 384 dimensiones; si
+# se cambia, hay que regenerar todos los embeddings (el script lo detecta solo).
+VECTORES_URI = os.getenv(
+    "VECTORES_URL", "postgresql+psycopg2://vectores_app:vectores_app_2026@localhost:5433/tiendaya_vectores"
+)
+MODELO_EMBEDDINGS = os.getenv("MODELO_EMBEDDINGS", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 
 # Eventos de sincronización (outbox) del checkout: cada cuántos segundos el
 # proceso de relevo reintenta los pendientes, y cuántos intentos hace antes de

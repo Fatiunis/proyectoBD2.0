@@ -4,7 +4,7 @@ from flask import Blueprint, request, jsonify
 from pymongo import ASCENDING
 from sqlalchemy.exc import IntegrityError
 
-from .. import busqueda_es, sincronizacion
+from .. import busqueda_es, sincronizacion, vectores
 from ..extensions import db, col_productos, col_historial, ZONA_GUATEMALA
 from ..models import Categoria, Producto, Inventario
 
@@ -506,5 +506,21 @@ def crear_o_actualizar_producto():
         except Exception as e2:
             db.session.rollback()
             print(f"[catalogo] ADVERTENCIA: tampoco se pudo registrar el evento de reindexación de {doc_id}: {e2}")
+
+    # Componente vectorial (entrega final): recalcula el embedding si cambió el
+    # nombre, la categoría o la descripción (si no, solo copia activo/categoría).
+    # Mismo patrón que Elasticsearch: si pgvector no responde, queda como evento
+    # pendiente para el relevo.
+    try:
+        vectores.guardar_embedding_producto(col_productos.find_one({"_id": doc_id}))
+    except Exception as e:
+        print(f"[catalogo] ADVERTENCIA: producto {doc_id} guardado en Mongo, pero no se pudo actualizar su "
+              f"embedding en pgvector; queda pendiente para el relevo: {e}")
+        try:
+            sincronizacion.registrar("embedding_producto", {"producto_id": doc_id})
+            db.session.commit()
+        except Exception as e2:
+            db.session.rollback()
+            print(f"[catalogo] ADVERTENCIA: tampoco se pudo registrar el evento de embedding de {doc_id}: {e2}")
 
     return jsonify({"mensaje": "Producto guardado con éxito", "producto_id": doc_id}), 201

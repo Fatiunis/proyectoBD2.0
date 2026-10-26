@@ -1,0 +1,107 @@
+====================================================================================================
+PRUEBA DE RECOMENDACIÓN Y BÚSQUEDA SEMÁNTICA (pgvector)
+====================================================================================================
+
+[R1] Cobertura de embeddings
+   catálogo=1019  embeddings=1019  modelo=['sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2']
+   [OK  ] un embedding por cada producto del catálogo
+   [OK  ] todos calculados con un solo modelo
+
+[R2] Productos relacionados (uno por categoría)
+   Audífonos              Audífonos Xiaomi Redmi Buds 5 Blan -> Audífonos Xiaomi Redmi (0.97), Audífonos Samsung Gala (0.77), Audífonos Sony WF-1000 (0.76)
+   Bicicletas             Bicicleta Fixie Fixie Urbana Chapi -> Bicicleta Ruta Special (0.80), Bicicleta Ruta Special (0.76), Bicicleta Ruta Special (0.75)
+   Celulares              Tecno Spark 20 Pro 256GB Verde Men -> Tecno Spark 20 Pro 256 (1.00), Samsung Galaxy S24 512 (0.80), Xiaomi 14T 256GB Verde (0.78)
+   Cuidado de la Piel     Tónico facial The Ordinary con Ret -> Tónico facial Neutroge (0.74), Limpiador facial Isdin (0.74), Tónico facial Isdin co (0.73)
+   Electrodomésticos de C Cafetera de Goteo Programable Hami -> Cafetera de Goteo Prog (0.94), Cafetera Térmica 10 Ta (0.89), Molino de Café de Muel (0.85)
+   Gorras                 Gorra Dad Hat Antigua Café         -> Gorra Dad Hat Chapín A (0.73), Gorra Snapback Volcán  (0.72), Gorra Dad Hat Guatemal (0.67)
+   Jeans                  Jeans Skinny Stretch Gris carbón 2 -> Jeans Skinny Stretch R (0.91), Jeans Skinny Stretch G (0.89), Jeans Wrangler Texas N (0.85)
+   Laptops                Laptop ASUS Vivobook 15 Ryzen 7 77 -> Laptop ASUS Vivobook 1 (0.97), Laptop ASUS ROG Zephyr (0.85), Laptop ASUS TUF Gaming (0.82)
+   Mochilas               Mochila Escolar Totto 22L Verde Ol -> Mochila Escolar Deuter (0.92), Mochila Urbana Roll-To (0.85), Mochila Escolar Deuter (0.76)
+   Monitores              Monitor Samsung Odyssey 21.5" VA F -> Monitor Samsung Odysse (0.92), Monitor Samsung Odysse (0.89), Monitor Samsung Odysse (0.88)
+   Mouse                  Mouse Genius DX-120 Gris           -> Mouse Genius DX-120 Gr (0.98), Mouse Genius DX-120 Ne (0.91), Mouse Apple Magic Mous (0.87)
+   Pantalones             Jeans Slim Fit Negro               -> Jeans Slim Tapered Neg (0.73), Jeans Bootcut Clásico  (0.70), Jeans Slim Tapered Gri (0.67)
+   Perfumes               Perfume Giorgio Armani Acqua di Gi -> Perfume Giorgio Armani (0.96), Perfume Giorgio Armani (0.88), Perfume Lancôme La Vie (0.85)
+   Pesas y Mancuernas     Mancuerna hexagonal CAP Barbell 5k -> Mancuerna hexagonal Yo (0.85), Set de mancuernas con  (0.81), Disco olímpico CAP Bar (0.80)
+   Playeras               Playera Básica Cuello Redondo Vino -> Playera Cuello V Vino  (0.88), Playera Básica Cuello  (0.79), Playera Cuello V Azul  (0.77)
+   Smartwatches           Smartwatch Xiaomi Smart Band 8 37m -> Smartwatch Xiaomi Smar (0.95), Smartwatch Xiaomi Redm (0.86), Smartwatch Samsung Gal (0.80)
+   Sudaderas              Sudadera Cuello Redondo Crewneck G -> Sudadera Cuello Redond (0.93), Sudadera Cuello Redond (0.83), Sudadera Cuello Redond (0.82)
+   Tablets                Tablet Amazon Fire HD 10 10.1" 32G -> Tablet Apple iPad 10.ª (0.80), Tablet Xiaomi Pad 6 11 (0.76), Tablet Lenovo Tab P12  (0.73)
+   Tapetes de Yoga        Tapete de Yoga Manduka PVC 4mm Ver -> Tapete de Yoga Manduka (0.97), Tapete de Yoga Manduka (0.87), Tapete de Yoga Manduka (0.87)
+   Teclados               Teclado Genius KB-110X Compacto Me -> Teclado Genius KB-110X (0.88), Teclado Genius KB-110X (0.85), Teclado Genius KB-110X (0.85)
+   Tenis                  Tenis Adidas Duramo SL Blanco/Negr -> Tenis Adidas Duramo SL (0.97), Tenis Adidas Duramo SL (0.88), Tenis Adidas Duramo SL (0.88)
+   Utensilios de Cocina   Sartén Antiadherente Imusa 24cm Az -> Set de Sartenes T-fal  (0.73), Sartén de Hierro Fundi (0.72), Set de Sartenes Oster  (0.68)
+   Vestidos               Vestido Babydoll Verde Esmeralda L -> Vestido Babydoll Vino  (0.80), Vestido Tubo Ejecutivo (0.80), Vestido Off-Shoulder A (0.77)
+   Zapatos                Tenis Running ProSpeed             -> Tenis Asics Gel-Nimbus (0.66), Tenis Puma Velocity Ni (0.66), Tenis New Balance 574  (0.65)
+   [OK  ] ningún producto se recomienda a sí mismo
+   [OK  ] todas las categorías reciben 6 recomendaciones  (144 de 144)
+   [OK  ] ≥ 70 % de las recomendaciones son de la misma categoría  (90 %)
+   [OK  ] ≥ 90 % son de la misma categoría o de una afín  (100 %)
+   latencia HTTP de /relacionados: mediana 32 ms, máx 2621 ms
+
+   Diversificación (PROD-0005, laptop con muchas variantes casi iguales):
+     sin diversificar: Laptop HP EliteBook 840 G10 Co | Laptop HP EliteBook 840 G10 Co | Laptop HP EliteBook 840 G10 Co | Laptop Lenovo ThinkPad E14 Cor | Laptop Lenovo ThinkPad E14 Cor | Laptop HP EliteBook 840 G10 Co
+     diversificado   : Laptop HP EliteBook 840 G10 Co | Laptop Lenovo ThinkPad E14 Cor | Laptop Lenovo LOQ 15 Core i5 3 | Laptop Acer Aspire 3 14 Pulgad | Laptop ASUS ROG Strix 18 Extre | Laptop HP Victus 16 Core i5 16
+   [OK  ] diversificar aumenta la cantidad de modelos distintos recomendados  (2 -> 6 modelos distintos)
+
+[R3] Búsqueda semántica vs. buscador léxico (Elasticsearch)
+   «algo para andar en bici por la ciudad»  esperado: Bicicletas
+      semántica : {'Bicicletas': 5}  -> Bicicleta Ruta Specialized Allez 700c Ta
+      léxica(ES): {'Cuidado de la Piel': 5}  -> Contorno de ojos Bioderma con Retinol 15
+      ACIERTO: 5/5 resultados en Bicicletas
+   «celular con buena cámara para fotos»  esperado: Celulares
+      semántica : {'Celulares': 5}  -> Motorola Edge 50 Fusion 256GB Negro
+      léxica(ES): {'Celulares': 5}  -> Apple iPhone 13 128GB Grafito
+      ACIERTO: 5/5 resultados en Celulares
+   «regalo para alguien que ama la música»  esperado: Audífonos
+      semántica : {'Audífonos': 4, 'Playeras': 1}  -> Audífonos Beats Solo 4 Beige
+      léxica(ES): sin resultados
+      ACIERTO: 4/5 resultados en Audífonos
+   «quiero hacer yoga en casa»  esperado: Tapetes de Yoga
+      semántica : {'Tapetes de Yoga': 5}  -> Tapete de Yoga Atitlán Yoga Co. Corcho y
+      léxica(ES): {'Tapetes de Yoga': 5}  -> Tapete de Yoga Atitlán Yoga Co. Corcho y
+      ACIERTO: 5/5 resultados en Tapetes de Yoga
+   «algo para preparar el desayuno en la cocina»  esperado: Electrodomésticos de Cocina
+      semántica : {'Sudaderas': 1, 'Utensilios de Cocina': 4}  -> Sudadera con Capucha Básica Café Talla X
+      léxica(ES): {'Utensilios de Cocina': 5}  -> Batería de Cocina Imusa 12 piezas Rojo
+      FALLO  : 0/5 resultados en Electrodomésticos de Cocina
+   «crema para la cara con piel seca»  esperado: Cuidado de la Piel
+      semántica : {'Cuidado de la Piel': 5}  -> Limpiador facial Isdin con Ácido salicíl
+      léxica(ES): {'Cuidado de la Piel': 5}  -> Crema hidratante Eucerin con Retinol 50m
+      ACIERTO: 5/5 resultados en Cuidado de la Piel
+   «reloj que mida mis pasos y el ritmo cardiaco»  esperado: Smartwatches
+      semántica : {'Smartwatches': 5}  -> Smartwatch Fitbit Versa 4 40mm Rosa corr
+      léxica(ES): {'Pesas y Mancuernas': 5}  -> Barra olímpica Everlast 20kg (Unidad)
+      ACIERTO: 5/5 resultados en Smartwatches
+   «fragancia elegante para una cena»  esperado: Perfumes
+      semántica : {'Utensilios de Cocina': 4, 'Vestidos': 1}  -> Juego de Cuchillos con Base Cuisinart 8 
+      léxica(ES): sin resultados
+      FALLO  : 0/5 resultados en Perfumes
+   [OK  ] tasa de acierto de la búsqueda semántica ≥ 75 %  (6/8 consultas)
+
+[R4] Plan de ejecución en pgvector
+   plan elegido por PostgreSQL   : Seq Scan on producto_embedding (actual time=0.022..0.607 row Execution Time: 0.718 ms
+   forzando el índice HNSW       : Index Scan using idx_producto_embedding_hnsw on producto_emb Execution Time: 5.588 ms
+   [OK  ] el índice HNSW existe y PostgreSQL puede usarlo
+   Con ~1000 vectores el recorrido exacto (100 % de recall) tarda pocos ms y el planificador lo
+   prefiere; el índice HNSW toma el relevo solo a medida que el catálogo crece (ver ADR-008).
+
+[R5] Recalcular el embedding al editar un producto (hash del texto)
+   [OK  ] guardar sin cambios no recalcula  ({'calculados': 0, 'sin_cambios': 1})
+   [OK  ] cambiar la descripción recalcula ese embedding  (hash 0633a8b8… -> 9ed87c6a…)
+   [OK  ] deshacer el cambio vuelve al embedding original
+
+[R6] Permisos en el componente vectorial (roles de PostgreSQL)
+   [OK  ] vectores_app no puede borrar la tabla  (must be owner of table producto_embedding)
+   [OK  ] vectores_app no puede crear tablas  (permission denied for schema public)
+   [OK  ] vectores_lector no puede modificar filas  (permission denied for table producto_embedding)
+   [OK  ] vectores_lector sí puede leer  (1019 filas)
+
+[R7] Caída real del componente vectorial
+   [OK  ] relacionados responde 503 VECTORES_NO_DISPONIBLE  (503)
+   [OK  ] el detalle del producto sigue funcionando
+   [OK  ] el buscador (Elasticsearch) sigue funcionando
+   [OK  ] al volver a levantarlo, las recomendaciones vuelven solas
+
+====================================================================================================
+RESUMEN: 20/20 verificaciones correctas
+RESULTADO: PASS

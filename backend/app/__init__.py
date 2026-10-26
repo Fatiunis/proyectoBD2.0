@@ -13,6 +13,7 @@ from .blueprints.direcciones import bp as direcciones_bp
 from .blueprints.fraude import bp as fraude_bp
 from .blueprints.historial import bp as historial_bp
 from .blueprints.ofertas import bp as ofertas_bp
+from .blueprints.recomendaciones import bp as recomendaciones_bp
 from .blueprints.resenas import bp as resenas_bp
 from .blueprints.sincronizacion import bp as sincronizacion_bp
 from .blueprints.vendedores import bp as vendedores_bp
@@ -36,6 +37,7 @@ def create_app():
     app.register_blueprint(fraude_bp)
     app.register_blueprint(historial_bp)
     app.register_blueprint(ofertas_bp)
+    app.register_blueprint(recomendaciones_bp)
     app.register_blueprint(resenas_bp)
     app.register_blueprint(sincronizacion_bp)
     app.register_blueprint(vendedores_bp)

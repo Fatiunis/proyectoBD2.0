@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Arquitectura TiendaYa · Final</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Diagrama de arquitectura FINAL de TiendaYa. Mismo sistema visual que
+   docs/arquitectura-entrega-3.html: una columna de lectura; cada figura es un
+   plano técnico ancho con scroll horizontal propio en pantallas chicas. El
+   color de acento (--nuevo) marca lo que se agregó en la entrega final. */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --fg: #1b2230;
+  --muted: #5b6577;
+  --line: #c9cfda;
+  --band: #eceff4;
+  --pg: #2f5fa8;
+  --mongo: #2b7a4b;
+  --redis: #b3352c;
+  --es: #9a6500;
+  --neo: #0d7681;
+  --vec: #6a46b8;
+  --nuevo: #b0306f;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161d; --surface: #1a2029; --fg: #e3e7ee; --muted: #9aa4b5; --line: #3a4352; --band: #171c24;
+    --pg: #82a9ea; --mongo: #6fcb93; --redis: #f08b80; --es: #e9bb55; --neo: #5fcdd6; --vec: #b9a2f2; --nuevo: #f28cbf;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161d; --surface: #1a2029; --fg: #e3e7ee; --muted: #9aa4b5; --line: #3a4352; --band: #171c24;
+  --pg: #82a9ea; --mongo: #6fcb93; --redis: #f08b80; --es: #e9bb55; --neo: #5fcdd6; --vec: #b9a2f2; --nuevo: #f28cbf;
+  color-scheme: dark;
+}
+
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.55; }
+.wrap {
+  max-width: 1240px; margin: 0 auto;
+  padding-block: 40px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 48px;
+}
+header { display: flex; flex-direction: column; gap: 12px; max-width: 72ch; }
+.eyebrow { font: 500 12px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: clamp(26px, 4vw, 36px); line-height: 1.15; margin: 0; font-weight: 700; text-wrap: balance; letter-spacing: -.01em; }
+h2 { font-size: 20px; margin: 0; font-weight: 600; text-wrap: balance; }
+p { margin: 0; }
+.lead { color: var(--muted); font-size: 16px; }
+code { font-family: var(--mono); font-size: .9em; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 10px 22px; font-size: 13px; color: var(--muted); align-items: center; }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.ln { width: 28px; height: 0; border-top: 2px solid var(--muted); display: inline-block; }
+.ln.d { border-top-style: dashed; }
+.ln.e { border-top-color: var(--nuevo); }
+
+section { display: flex; flex-direction: column; gap: 14px; }
+section > p { max-width: 75ch; color: var(--muted); }
+figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; display: flex; flex-direction: column; }
+.scroll { overflow-x: auto; padding: 12px; }
+.scroll svg { display: block; width: 100%; min-width: 860px; height: auto; }
+figcaption { border-top: 1px solid var(--line); padding: 12px 16px; font-size: 13.5px; color: var(--muted); max-width: 110ch; }
+
+/* --- SVG --- */
+svg text { font-family: var(--sans); }
+.t   { fill: var(--fg); font-size: 13px; font-weight: 500; }
+.tb  { fill: var(--fg); font-size: 14px; font-weight: 600; }
+.tbig{ fill: var(--fg); font-size: 15px; font-weight: 700; }
+.ts  { fill: var(--muted); font-size: 11.5px; }
+.tm  { fill: var(--fg); font-family: var(--mono); font-size: 11.5px; }
+.tmb { fill: var(--fg); font-family: var(--mono); font-size: 12.5px; font-weight: 600; }
+.tml { fill: var(--muted); font-family: var(--mono); font-size: 11px; }
+.ph  { fill: var(--muted); font-family: var(--mono); font-size: 11px; letter-spacing: .08em; }
+.box  { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+.band { fill: var(--band); stroke: none; }
+.cont { fill: none; stroke: var(--line); stroke-width: 1.2; }
+.sep  { stroke: var(--line); stroke-dasharray: 2 4; }
+.edge { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+.dash { stroke-dasharray: 5 4; }
+.ah   { fill: var(--muted); }
+.nv   { stroke: var(--nuevo) !important; stroke-width: 2 !important; }
+.cnv  { fill: var(--nuevo) !important; }
+.warn { stroke: var(--redis); }
+.ahw  { fill: var(--redis); }
+.pill { fill: none; stroke: var(--nuevo); stroke-width: 1.2; }
+
+.s-pg    { stroke: var(--pg);    stroke-width: 1.5; fill: color-mix(in srgb, var(--pg) 8%, var(--surface)); }
+.s-mongo { stroke: var(--mongo); stroke-width: 1.5; fill: color-mix(in srgb, var(--mongo) 8%, var(--surface)); }
+.s-redis { stroke: var(--redis); stroke-width: 1.5; fill: color-mix(in srgb, var(--redis) 8%, var(--surface)); }
+.s-es    { stroke: var(--es);    stroke-width: 1.5; fill: color-mix(in srgb, var(--es) 8%, var(--surface)); }
+.s-neo   { stroke: var(--neo);   stroke-width: 1.5; fill: color-mix(in srgb, var(--neo) 8%, var(--surface)); }
+.s-vec   { stroke: var(--vec);   stroke-width: 1.5; fill: color-mix(in srgb, var(--vec) 8%, var(--surface)); }
+.c-pg { fill: var(--pg); } .c-mongo { fill: var(--mongo); } .c-redis { fill: var(--redis); } .c-es { fill: var(--es); } .c-neo { fill: var(--neo); } .c-vec { fill: var(--vec); }
+.c-muted { fill: var(--muted); }
+
+/* --- Tablas --- */
+.tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; min-width: 900px; font-size: 13px; }
+th, td { padding: 9px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+tbody tr:last-child td { border-bottom: 0; }
+thead th { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); font-weight: 600; background: var(--band); }
+thead th.pg { color: var(--pg); } thead th.mongo { color: var(--mongo); } thead th.redis { color: var(--redis); } thead th.neo { color: var(--neo); } thead th.es { color: var(--es); } thead th.vec { color: var(--vec); }
+td.mod { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+td.mod .tag { font-family: var(--sans); font-size: 10.5px; font-weight: 600; color: var(--nuevo); border: 1px solid var(--nuevo); border-radius: 3px; padding: 0 4px; margin-left: 6px; }
+.m { display: inline-flex; gap: 6px; align-items: baseline; color: var(--fg); }
+.m::before { content: ""; width: 9px; height: 9px; border-radius: 50%; flex: none; transform: translateY(1px); background: var(--muted); }
+.m.c::before { background: transparent; border: 1.5px dashed var(--muted); width: 7px; height: 7px; }
+.m.new { color: var(--nuevo); }
+.m.new::before { background: var(--nuevo); }
+.m.c.new::before { background: transparent; border-color: var(--nuevo); }
+td.empty { color: var(--line); }
+td.motor { font-weight: 600; white-space: nowrap; }
+td code { white-space: nowrap; }
+.si { color: var(--mongo); font-weight: 600; }
+.no { color: var(--redis); font-weight: 600; }
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.notes div { min-width: 0; display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--muted); }
+.notes strong { color: var(--fg); font-weight: 600; }
+footer { font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">TiendaYa · Bases de Datos 2 · Entrega final</div>
+    <h1>Arquitectura políglota de TiendaYa</h1>
+    <p class="lead">Un frontend Vue habla con una API Flask dividida en 14 Blueprints. Seis componentes de persistencia, cada uno con un rol: PostgreSQL decide si hubo compra; MongoDB es la fuente de verdad del catálogo; Redis guarda lo transitorio; Elasticsearch, Neo4j y pgvector son proyecciones derivadas que se reconstruyen si se pierden. No hay commit en dos fases: las copias se reintentan por un outbox.</p>
+    <div class="legend" aria-label="Leyenda">
+      <span><i class="sw" style="background:var(--pg)"></i>PostgreSQL</span>
+      <span><i class="sw" style="background:var(--mongo)"></i>MongoDB</span>
+      <span><i class="sw" style="background:var(--redis)"></i>Redis</span>
+      <span><i class="sw" style="background:var(--es)"></i>Elasticsearch</span>
+      <span><i class="sw" style="background:var(--neo)"></i>Neo4j</span>
+      <span><i class="sw" style="background:var(--vec)"></i>pgvector</span>
+      <span><i class="ln"></i>lee o escribe directo</span>
+      <span><i class="ln d"></i>copia que puede atrasarse</span>
+      <span><i class="ln e"></i>nuevo en la entrega final</span>
+    </div>
+  </header>
+
+  <!-- ============ 1. VISTA GENERAL ============ -->
+  <section>
+    <h2>1. Vista general</h2>
+    <p>Cada flecha hacia un motor lleva el usuario con que se conecta. Desde la entrega final, Redis no acepta conexiones anónimas y cada servicio entra con un usuario distinto.</p>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 1180 760" role="img" aria-label="Vue llama por REST a Flask. Los Blueprints de Flask se agrupan según su motor principal: PostgreSQL, Redis, MongoDB, Elasticsearch, Neo4j y, nuevo en la entrega final, pgvector a través de recomendaciones.py. Redis exige usuario: la API usa tiendaya_api y el relevo tiendaya_relevo. pgvector se usa con el rol vectores_app.">
+          <defs>
+            <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+          </defs>
+
+          <!-- Cliente -->
+          <rect x="20" y="320" width="180" height="110" rx="6" class="box"/>
+          <text x="110" y="354" text-anchor="middle" class="tbig">Vue 3 + Vite</text>
+          <text x="110" y="374" text-anchor="middle" class="tml">frontend/app</text>
+          <text x="110" y="398" text-anchor="middle" class="ts">sitio público</text>
+          <text x="110" y="414" text-anchor="middle" class="ts">y panel admin</text>
+
+          <line x1="200" y1="375" x2="276" y2="375" class="edge" marker-end="url(#a1)"/>
+          <text x="238" y="365" text-anchor="middle" class="ts">REST · JSON</text>
+
+          <!-- Flask -->
+          <rect x="280" y="20" width="400" height="720" rx="8" class="cont"/>
+          <text x="300" y="46" class="tbig">Flask · backend/app</text>
+          <text x="300" y="66" class="ts">14 Blueprints, uno por dominio, agrupados por el motor que usan</text>
+
+          <!-- Banda PG -->
+          <rect x="300" y="84"  width="170" height="30" rx="4" class="box"/><text x="385" y="104" text-anchor="middle" class="tm">auth.py</text>
+          <rect x="490" y="84"  width="170" height="30" rx="4" class="box"/><text x="575" y="104" text-anchor="middle" class="tm">direcciones.py</text>
+          <rect x="300" y="122" width="170" height="30" rx="4" class="box"/><text x="385" y="142" text-anchor="middle" class="tm">compradores.py</text>
+          <rect x="490" y="122" width="170" height="30" rx="4" class="box"/><text x="575" y="142" text-anchor="middle" class="tm">vendedores.py</text>
+          <rect x="300" y="160" width="170" height="30" rx="4" class="box"/><text x="385" y="180" text-anchor="middle" class="tm">checkout.py</text>
+          <rect x="490" y="160" width="170" height="30" rx="4" class="box"/><text x="575" y="180" text-anchor="middle" class="tm">sincronizacion.py</text>
+          <rect x="300" y="198" width="360" height="30" rx="4" class="box"/><text x="480" y="218" text-anchor="middle" class="tm">Relevo del outbox · hilo, cada 15 s</text>
+          <line x1="296" y1="244" x2="664" y2="244" class="sep"/>
+
+          <!-- Banda Redis -->
+          <rect x="300" y="276" width="170" height="30" rx="4" class="box"/><text x="385" y="296" text-anchor="middle" class="tm">carrito.py</text>
+          <rect x="490" y="276" width="170" height="30" rx="4" class="box"/><text x="575" y="296" text-anchor="middle" class="tm">ofertas.py</text>
+          <line x1="296" y1="346" x2="664" y2="346" class="sep"/>
+
+          <!-- Banda Mongo -->
+          <rect x="300" y="362" width="170" height="30" rx="4" class="box"/><text x="385" y="382" text-anchor="middle" class="tm">catalogo.py</text>
+          <rect x="490" y="362" width="170" height="30" rx="4" class="box"/><text x="575" y="382" text-anchor="middle" class="tm">historial.py</text>
+          <rect x="300" y="400" width="170" height="30" rx="4" class="box"/><text x="385" y="420" text-anchor="middle" class="tm">resenas.py</text>
+          <line x1="296" y1="446" x2="664" y2="446" class="sep"/>
+
+          <!-- Banda ES -->
+          <rect x="300" y="476" width="170" height="30" rx="4" class="box"/><text x="385" y="496" text-anchor="middle" class="tm">busqueda.py</text>
+          <line x1="296" y1="536" x2="664" y2="536" class="sep"/>
+
+          <!-- Banda Neo4j -->
+          <rect x="300" y="566" width="170" height="30" rx="4" class="box"/><text x="385" y="586" text-anchor="middle" class="tm">fraude.py</text>
+          <line x1="296" y1="626" x2="664" y2="626" class="sep"/>
+
+          <!-- Banda pgvector (nuevo) -->
+          <rect x="300" y="664" width="360" height="30" rx="4" class="box nv"/><text x="480" y="684" text-anchor="middle" class="tm">recomendaciones.py · vectores.py</text>
+
+          <!-- Aristas Flask -> motores -->
+          <line x1="680" y1="125" x2="814" y2="125" class="edge" marker-end="url(#a1)"/>
+          <text x="747" y="115" text-anchor="middle" class="ts">SQL · ACID</text>
+          <text x="747" y="141" text-anchor="middle" class="tml">postgres</text>
+
+          <line x1="680" y1="291" x2="814" y2="291" class="edge nv" marker-end="url(#a1)"/>
+          <text x="747" y="281" text-anchor="middle" class="ts">comandos + Lua</text>
+          <text x="747" y="307" text-anchor="middle" class="tml cnv">tiendaya_api</text>
+          <text x="747" y="321" text-anchor="middle" class="tml cnv">tiendaya_relevo</text>
+
+          <line x1="680" y1="395" x2="814" y2="395" class="edge" marker-end="url(#a1)"/>
+          <text x="747" y="385" text-anchor="middle" class="ts">documentos</text>
+
+          <line x1="680" y1="491" x2="814" y2="491" class="edge" marker-end="url(#a1)"/>
+          <text x="747" y="481" text-anchor="middle" class="ts">multi_match · aggs</text>
+
+          <line x1="680" y1="581" x2="814" y2="581" class="edge" marker-end="url(#a1)"/>
+          <text x="747" y="571" text-anchor="middle" class="ts">Cypher</text>
+          <text x="747" y="597" text-anchor="middle" class="tml">neo4j</text>
+
+          <line x1="680" y1="679" x2="814" y2="679" class="edge nv" marker-end="url(#a1)"/>
+          <text x="747" y="669" text-anchor="middle" class="ts">SQL · &lt;=&gt; coseno</text>
+          <text x="747" y="695" text-anchor="middle" class="tml cnv">vectores_app</text>
+
+          <!-- PostgreSQL -->
+          <rect x="820" y="20" width="340" height="214" rx="6" class="s-pg"/>
+          <text x="836" y="46" class="tbig c-pg">PostgreSQL</text>
+          <text x="1144" y="46" text-anchor="end" class="ts">fuente de verdad · :5432</text>
+          <text x="836" y="74"  class="tm">usuarios · direcciones · categorias</text>
+          <text x="836" y="94"  class="tm">pedidos · lineas_pedido · pagos</text>
+          <text x="836" y="114" class="tm">inventario</text>
+          <text x="836" y="134" class="tm">sp_procesar_checkout (FOR UPDATE)</text>
+          <text x="836" y="160" class="tm">checkout_idempotencia</text>
+          <text x="836" y="180" class="tm">eventos_sincronizacion (outbox)</text>
+          <text x="836" y="214" class="ts">único motor que decide si hubo compra</text>
+
+          <!-- Redis -->
+          <rect x="820" y="244" width="340" height="96" rx="6" class="s-redis"/>
+          <text x="836" y="268" class="tbig c-redis">Redis</text>
+          <text x="1144" y="268" text-anchor="end" class="ts">estado transitorio</text>
+          <text x="836" y="290" class="tml">carrito:{id_usuario}  (sin TTL por defecto)</text>
+          <text x="836" y="308" class="tml">oferta:{pid}:stock · :limite · :precio · :reservas</text>
+          <text x="836" y="328" class="tml cnv">ACL: default off · 4 usuarios (users.acl)</text>
+
+          <!-- MongoDB -->
+          <rect x="820" y="350" width="340" height="90" rx="6" class="s-mongo"/>
+          <text x="836" y="374" class="tbig c-mongo">MongoDB</text>
+          <text x="1144" y="374" text-anchor="end" class="ts">fuente de verdad del catálogo</text>
+          <text x="836" y="396" class="tm">productos</text>
+          <text x="836" y="414" class="tm">historial_cambios_productos</text>
+          <text x="836" y="432" class="tm">resenas</text>
+
+          <!-- Elasticsearch -->
+          <rect x="820" y="450" width="340" height="80" rx="6" class="s-es"/>
+          <text x="836" y="474" class="tbig c-es">Elasticsearch</text>
+          <text x="1144" y="474" text-anchor="end" class="ts">proyección para buscar</text>
+          <text x="836" y="498" class="tml">alias productos → productos_v&lt;fecha&gt;</text>
+          <text x="836" y="516" class="ts">analizador español · sinónimos · autocompletado</text>
+
+          <!-- Neo4j -->
+          <rect x="820" y="540" width="340" height="80" rx="6" class="s-neo"/>
+          <text x="836" y="564" class="tbig c-neo">Neo4j</text>
+          <text x="1144" y="564" text-anchor="end" class="ts">proyección para fraude</text>
+          <text x="836" y="588" class="tml">(:Cuenta)-[:CALIFICO]-&gt;(:Producto)</text>
+          <text x="836" y="606" class="tml">+ :Vendedor y :Direccion (fraude ampliado)</text>
+
+          <!-- pgvector (nuevo) -->
+          <rect x="820" y="630" width="340" height="110" rx="6" class="s-vec nv"/>
+          <text x="836" y="654" class="tbig c-vec">PostgreSQL + pgvector</text>
+          <rect x="1050" y="642" width="94" height="18" rx="3" class="pill"/>
+          <text x="1097" y="655" text-anchor="middle" class="ts cnv">Entrega final</text>
+          <text x="836" y="678" class="tml">producto_embedding · vector(384)</text>
+          <text x="836" y="696" class="tml">índice HNSW (vector_cosine_ops) · :5433</text>
+          <text x="836" y="714" class="ts">proyección para recomendar · roles</text>
+          <text x="836" y="730" class="ts">vectores_app (DML) · vectores_lector (lectura)</text>
+        </svg>
+      </div>
+      <figcaption>Cada grupo de Blueprints apunta al motor que es su fuente de verdad. Lo marcado en magenta es de la entrega final: el componente vectorial y los usuarios con que se entra a Redis y a pgvector. Las copias entre motores (stock, índice del buscador, grafo y embeddings) se ven en las figuras 2 y 3 y en la matriz.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============ 2. CHECKOUT ============ -->
+  <section>
+    <h2>2. Checkout distribuido: idempotencia, transacción y outbox</h2>
+    <p>El checkout toca cuatro motores y ninguna transacción los abarca a todos. Lo que pasa antes del COMMIT se compensa. Lo que pasa después se completa con reintentos y nunca se deshace. Desde la entrega final, el relevo entra a Redis con su propio usuario, que solo puede leer y borrar líneas de carritos y reservas.</p>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 1180 520" role="img" aria-label="Checkout en tres fases: antes del COMMIT se valida la clave de idempotencia y se consumen reservas en Redis; una transacción en PostgreSQL inserta la clave, llama a sp_procesar_checkout e inserta los eventos del outbox; después del COMMIT se aplican los eventos a Redis, MongoDB y Elasticsearch. Si alguno falla, el relevo lo reintenta cada 15 segundos con el usuario de Redis tiendaya_relevo.">
+          <defs>
+            <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+            <marker id="a2w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahw"/></marker>
+          </defs>
+
+          <rect x="20"  y="20" width="340" height="360" rx="8" class="band"/>
+          <rect x="380" y="20" width="400" height="360" rx="8" class="band"/>
+          <rect x="800" y="20" width="360" height="360" rx="8" class="band"/>
+          <text x="36"  y="44" class="ph">FASE 1 · ANTES DEL COMMIT</text>
+          <text x="36"  y="62" class="ts">si algo falla, se compensa</text>
+          <text x="396" y="44" class="ph">FASE 2 · UNA TRANSACCIÓN</text>
+          <text x="396" y="62" class="ts">todo o nada</text>
+          <text x="816" y="44" class="ph">FASE 3 · DESPUÉS DEL COMMIT</text>
+          <text x="816" y="62" class="ts">en el mismo request; se completa, no se deshace</text>
+
+          <rect x="36" y="84" width="308" height="48" rx="5" class="box"/>
+          <text x="52" y="104" class="tmb">POST /api/checkout</text>
+          <text x="52" y="122" class="ts">desde el navegador, con clave_idempotencia</text>
+
+          <rect x="36" y="150" width="308" height="48" rx="5" class="s-pg"/>
+          <text x="52" y="170" class="t">¿La clave ya se usó?</text>
+          <text x="52" y="188" class="ts">sí → 200 «repetido», mismo pedido, sin cobrar</text>
+          <text x="330" y="170" text-anchor="end" class="ts c-pg">PostgreSQL</text>
+
+          <rect x="36" y="216" width="308" height="48" rx="5" class="s-redis"/>
+          <text x="52" y="236" class="t">Leer carrito:{id_usuario}</text>
+          <text x="52" y="254" class="ts">como tiendaya_api</text>
+          <text x="330" y="236" text-anchor="end" class="ts c-redis">Redis</text>
+
+          <rect x="36" y="282" width="308" height="48" rx="5" class="s-redis"/>
+          <text x="52" y="302" class="t">Consumir reservas de oferta</text>
+          <text x="52" y="320" class="ts">script Lua · estado «en_pago», baja el cupo</text>
+          <text x="330" y="302" text-anchor="end" class="ts c-redis">Redis</text>
+
+          <line x1="190" y1="132" x2="190" y2="148" class="edge" marker-end="url(#a2)"/>
+          <line x1="190" y1="198" x2="190" y2="214" class="edge" marker-end="url(#a2)"/>
+          <line x1="190" y1="264" x2="190" y2="280" class="edge" marker-end="url(#a2)"/>
+
+          <text x="36" y="352" class="ts c-redis">↩ si falla antes del COMMIT, las reservas vuelven</text>
+          <text x="36" y="368" class="ts c-redis">a la oferta y responde 503: no se cobró nada</text>
+
+          <rect x="400" y="84" width="360" height="250" rx="6" class="s-pg"/>
+          <text x="416" y="106" class="tmb c-pg">BEGIN</text>
+          <rect x="416" y="118" width="328" height="44" rx="4" class="box"/>
+          <text x="432" y="145" class="tm">INSERT checkout_idempotencia</text>
+          <rect x="416" y="172" width="328" height="48" rx="4" class="box"/>
+          <text x="432" y="192" class="tm">CALL sp_procesar_checkout</text>
+          <text x="432" y="210" class="ts">pedido · líneas · pago · inventario</text>
+          <rect x="416" y="230" width="328" height="48" rx="4" class="box"/>
+          <text x="432" y="250" class="tm">INSERT eventos_sincronizacion</text>
+          <text x="432" y="268" class="ts">outbox: un evento por cada motor a copiar</text>
+          <text x="416" y="310" class="tmb c-pg">COMMIT</text>
+          <text x="744" y="310" text-anchor="end" class="ts">pedido + clave + eventos juntos</text>
+
+          <line x1="344" y1="298" x2="398" y2="298" class="edge" marker-end="url(#a2)"/>
+          <line x1="400" y1="322" x2="346" y2="322" class="edge dash warn" marker-end="url(#a2w)"/>
+
+          <line x1="760" y1="186" x2="806" y2="186" class="edge" marker-end="url(#a2)"/>
+          <line x1="810" y1="106" x2="810" y2="256" class="edge"/>
+          <line x1="810" y1="106" x2="820" y2="106" class="edge"/>
+          <line x1="810" y1="156" x2="820" y2="156" class="edge"/>
+          <line x1="810" y1="206" x2="820" y2="206" class="edge"/>
+          <line x1="810" y1="256" x2="820" y2="256" class="edge"/>
+
+          <rect x="820" y="86"  width="324" height="40" rx="5" class="s-redis"/>
+          <text x="836" y="111" class="t c-redis">Redis</text><text x="936" y="111" class="ts">cerrar reservas (Lua)</text>
+          <rect x="820" y="136" width="324" height="40" rx="5" class="s-redis"/>
+          <text x="836" y="161" class="t c-redis">Redis</text><text x="936" y="161" class="ts">limpiar las líneas pagadas</text>
+          <rect x="820" y="186" width="324" height="40" rx="5" class="s-mongo"/>
+          <text x="836" y="211" class="t c-mongo">MongoDB</text><text x="936" y="211" class="ts">stock = el de PostgreSQL</text>
+          <rect x="820" y="236" width="324" height="40" rx="5" class="s-es"/>
+          <text x="836" y="261" class="t c-es">Elasticsearch</text><text x="936" y="261" class="ts">stock = el de PostgreSQL</text>
+
+          <line x1="982" y1="276" x2="982" y2="294" class="edge" marker-end="url(#a2)"/>
+          <rect x="820" y="296" width="324" height="48" rx="5" class="box"/>
+          <text x="836" y="316" class="t">201 · pedido confirmado</text>
+          <text x="836" y="334" class="ts">avisa sincronizacion_pendiente si algo falló</text>
+
+          <line x1="580" y1="278" x2="580" y2="398" class="edge dash" marker-end="url(#a2)"/>
+          <text x="588" y="364" class="ts">eventos que fallaron</text>
+          <text x="588" y="378" class="ts">quedan pendientes</text>
+
+          <rect x="380" y="400" width="780" height="100" rx="8" class="box"/>
+          <text x="400" y="430" class="tb">Relevo del outbox</text>
+          <text x="400" y="450" class="ts">hilo dentro de Flask · cada 15 s</text>
+          <text x="400" y="472" class="tml">FOR UPDATE SKIP LOCKED</text>
+          <text x="400" y="490" class="tml cnv">Redis: usuario tiendaya_relevo</text>
+          <text x="640" y="430" class="t">1. Toma los eventos pendientes de PostgreSQL.</text>
+          <text x="640" y="452" class="t">2. Los vuelve a aplicar en Redis, MongoDB, Elasticsearch y pgvector.</text>
+          <text x="640" y="474" class="t">3. Son idempotentes: aplicarlos dos veces deja el mismo estado.</text>
+
+          <line x1="1100" y1="400" x2="1100" y2="384" class="edge dash" marker-end="url(#a2)"/>
+        </svg>
+      </div>
+      <figcaption>La flecha roja punteada es la compensación: solo existe antes del COMMIT. Después del COMMIT el pedido es definitivo y, si un motor estaba caído, el relevo completa la copia. La prueba de falla (<code>docs/evidencia/prueba_fallas_checkout.txt</code>) sigue dando 40/40 con las ACL de Redis activas.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============ 3. RECOMENDACIÓN ============ -->
+  <section>
+    <h2>3. Recomendación y búsqueda semántica (nuevo)</h2>
+    <p>pgvector solo guarda vectores y responde «estos productos se parecen, con esta similitud». Los datos que se muestran salen de MongoDB. El modelo de lenguaje solo se necesita para convertir texto en vector: al guardar un producto y al buscar por frase; los productos relacionados comparan vectores ya guardados.</p>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 1180 330" role="img" aria-label="El navegador pide productos relacionados o una búsqueda semántica a recomendaciones.py. Este consulta a pgvector los vecinos más cercanos por distancia coseno y luego lee de MongoDB los datos de esos productos. Para buscar por frase, el texto pasa primero por el modelo de embeddings. Al guardar un producto, catalogo.py recalcula su embedding y lo guarda en pgvector; si falla, deja un evento en el outbox. Un script hace la carga completa desde MongoDB.">
+          <defs>
+            <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+          </defs>
+
+          <rect x="20" y="70" width="190" height="100" rx="6" class="box"/>
+          <text x="115" y="104" text-anchor="middle" class="tbig">Navegador</text>
+          <text x="115" y="126" text-anchor="middle" class="tml">ProductosSemanticos.vue</text>
+          <text x="115" y="146" text-anchor="middle" class="ts">detalle y búsqueda</text>
+
+          <rect x="300" y="60" width="280" height="88" rx="5" class="box nv"/>
+          <text x="316" y="84" class="tmb">recomendaciones.py</text>
+          <text x="316" y="106" class="tml">GET /api/productos/:id/relacionados</text>
+          <text x="316" y="124" class="tml">GET /api/busqueda/semantica?q=</text>
+          <text x="316" y="140" class="tml">GET /api/vectores/estado</text>
+
+          <rect x="300" y="222" width="280" height="80" rx="5" class="box"/>
+          <text x="316" y="246" class="tb">Modelo de embeddings</text>
+          <text x="316" y="266" class="tml">paraphrase-multilingual-MiniLM-L12-v2</text>
+          <text x="316" y="286" class="ts">384 dim · CPU · se carga la primera vez que se usa</text>
+
+          <rect x="680" y="60" width="250" height="110" rx="5" class="s-vec nv"/>
+          <text x="696" y="84" class="tb c-vec">pgvector</text>
+          <text x="696" y="106" class="tml">producto_embedding</text>
+          <text x="696" y="124" class="tml">ORDER BY embedding &lt;=&gt; v</text>
+          <text x="696" y="142" class="ts">HNSW · iterative_scan</text>
+          <text x="696" y="160" class="ts">+ diversificación (umbral 0.93)</text>
+
+          <rect x="990" y="60" width="170" height="110" rx="5" class="s-mongo"/>
+          <text x="1006" y="84" class="tb c-mongo">MongoDB</text>
+          <text x="1006" y="106" class="tml">productos</text>
+          <text x="1006" y="126" class="ts">nombre, precio, imagen</text>
+          <text x="1006" y="142" class="ts">fuente de verdad: si está</text>
+          <text x="1006" y="158" class="ts">inactivo, no se muestra</text>
+
+          <rect x="680" y="222" width="250" height="80" rx="5" class="box"/>
+          <text x="696" y="246" class="tmb">catalogo.py · guardar</text>
+          <text x="696" y="266" class="ts">recalcula si cambió el hash del texto</text>
+          <text x="696" y="284" class="ts">si falla: evento embedding_producto</text>
+
+          <rect x="990" y="222" width="170" height="80" rx="5" class="box"/>
+          <text x="1006" y="246" class="tm">generar_embeddings_</text>
+          <text x="1006" y="262" class="tm">productos.py</text>
+          <text x="1006" y="284" class="ts">carga completa, idempotente</text>
+
+          <line x1="210" y1="104" x2="298" y2="104" class="edge nv" marker-end="url(#a4)"/>
+          <text x="254" y="94" text-anchor="middle" class="ts">1</text>
+
+          <line x1="580" y1="96" x2="678" y2="96" class="edge nv" marker-end="url(#a4)"/>
+          <text x="629" y="86" text-anchor="middle" class="ts">2 · vecinos</text>
+          <text x="629" y="114" text-anchor="middle" class="ts">ids + similitud</text>
+
+          <path d="M540,60 L540,30 L1075,30 L1075,58" class="edge" marker-end="url(#a4)"/>
+          <text x="808" y="24" text-anchor="middle" class="ts">3 · datos de las tarjetas, en el orden de pgvector</text>
+
+          <line x1="440" y1="148" x2="440" y2="220" class="edge" marker-end="url(#a4)"/>
+          <text x="448" y="182" class="ts">solo búsqueda:</text>
+          <text x="448" y="196" class="ts">texto → vector</text>
+
+          <line x1="680" y1="262" x2="582" y2="262" class="edge" marker-end="url(#a4)"/>
+          <text x="631" y="254" text-anchor="middle" class="ts">vectoriza</text>
+          <line x1="805" y1="222" x2="805" y2="172" class="edge dash nv" marker-end="url(#a4)"/>
+          <text x="813" y="202" class="ts">upsert</text>
+
+          <line x1="1075" y1="170" x2="1075" y2="220" class="edge dash" marker-end="url(#a4)"/>
+          <text x="1083" y="200" class="ts">lee</text>
+          <line x1="990" y1="250" x2="932" y2="160" class="edge dash" marker-end="url(#a4)"/>
+        </svg>
+      </div>
+      <figcaption>Si pgvector no responde, <code>recomendaciones.py</code> devuelve 503 (<code>VECTORES_NO_DISPONIBLE</code>) y la franja de recomendaciones simplemente no aparece; el resto del portal no depende de este componente (<code>docs/evidencia/prueba_recomendacion.txt</code>, bloque R7). Con ~1000 vectores el planificador prefiere un recorrido exacto (0.9 ms) sobre el HNSW; el índice toma el relevo a medida que el catálogo crece.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============ 4. MATRIZ ============ -->
+  <section>
+    <h2>4. Qué módulo habla con qué motor</h2>
+    <p>La figura 1 muestra solo el motor principal de cada Blueprint. Esta tabla agrega todas las conexiones, incluidas las copias entre motores.</p>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--muted);border-radius:50%"></i>lee o escribe directo</span>
+      <span><i class="sw" style="border:1.5px dashed var(--muted);border-radius:50%"></i>copia que puede atrasarse (sin 2PC)</span>
+      <span><i class="sw" style="background:var(--nuevo);border-radius:50%"></i>nuevo en la entrega final</span>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Módulo</th><th class="pg">PostgreSQL</th><th class="redis">Redis</th><th class="mongo">MongoDB</th><th class="es">Elasticsearch</th><th class="neo">Neo4j</th><th class="vec">pgvector</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="mod">auth.py</td><td><span class="m">usuarios</span></td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td></tr>
+          <tr><td class="mod">direcciones.py</td><td><span class="m">direcciones</span></td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td><td><span class="m c">ENVIA_A tras el COMMIT</span></td><td class="empty">—</td></tr>
+          <tr><td class="mod">compradores.py</td><td><span class="m">historial de pedidos</span></td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td></tr>
+          <tr><td class="mod">vendedores.py</td><td><span class="m">ventas del vendedor</span></td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td></tr>
+          <tr><td class="mod">checkout.py</td><td><span class="m">idempotencia + SP + outbox</span></td><td><span class="m">carrito, reservas (Lua) · <span class="cnv" style="color:var(--nuevo)">tiendaya_api</span></span></td><td><span class="m c">stock por outbox</span></td><td><span class="m c">stock por outbox</span></td><td class="empty">—</td><td class="empty">—</td></tr>
+          <tr><td class="mod">relevo</td><td><span class="m">eventos pendientes</span></td><td><span class="m c new">cerrar reservas, limpiar carrito · tiendaya_relevo</span></td><td><span class="m c">stock</span></td><td><span class="m c">stock, reindexar</span></td><td class="empty">—</td><td><span class="m c new">recalcular embedding</span></td></tr>
+          <tr><td class="mod">sincronizacion.py</td><td><span class="m">panel de eventos</span></td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td></tr>
+          <tr><td class="mod">carrito.py</td><td class="empty">—</td><td><span class="m">carrito:{id}</span></td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td></tr>
+          <tr><td class="mod">ofertas.py</td><td class="empty">—</td><td><span class="m">oferta:* (Lua, SCAN)</span></td><td><span class="m">dueño, precio, nombre</span></td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td></tr>
+          <tr><td class="mod">catalogo.py</td><td><span class="m c">stock editado → inventario</span></td><td class="empty">—</td><td><span class="m">productos, $text</span></td><td><span class="m c">indexar al guardar</span></td><td class="empty">—</td><td><span class="m c new">embedding al guardar</span></td></tr>
+          <tr><td class="mod">historial.py</td><td class="empty">—</td><td class="empty">—</td><td><span class="m">historial de cambios</span></td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td></tr>
+          <tr><td class="mod">resenas.py</td><td><span class="m">¿compró el producto?</span></td><td class="empty">—</td><td><span class="m">resenas</span></td><td class="empty">—</td><td><span class="m c">CALIFICO (mejor esfuerzo)</span></td><td class="empty">—</td></tr>
+          <tr><td class="mod">busqueda.py</td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td><td><span class="m">multi_match, aggs, suggester</span></td><td class="empty">—</td><td class="empty">—</td></tr>
+          <tr><td class="mod">fraude.py</td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td><td class="empty">—</td><td><span class="m">Cypher, 5 patrones</span></td><td class="empty">—</td></tr>
+          <tr><td class="mod">recomendaciones.py<span class="tag">final</span></td><td class="empty">—</td><td class="empty">—</td><td><span class="m new">datos de las tarjetas</span></td><td class="empty">—</td><td class="empty">—</td><td><span class="m new">vecinos por coseno</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 5. CONTROL DE ACCESO ============ -->
+  <section>
+    <h2>5. Control de acceso por componente</h2>
+    <p>El requisito de la entrega final es al menos un componente NoSQL con autenticación y autorización explícitas; se configuró en Redis, con un usuario por servicio. pgvector también usa roles con mínimo privilegio. La tabla dice, sin adornos, cómo queda cada componente.</p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Componente</th><th>Autenticación</th><th>Usuarios / roles y alcance</th><th>Evidencia</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="motor" style="color:var(--redis)">Redis</td>
+            <td><span class="si">Sí</span> · ACL de Redis 7, <code>database/redis/users.acl</code>, contraseñas guardadas como SHA-256; <code>default</code> deshabilitado</td>
+            <td><code>tiendaya_api</code>: keys <code>carrito:*</code> y <code>oferta:*</code>, 25 comandos de datos y scripts; sin <code>KEYS</code>, <code>FLUSHALL</code>, <code>CONFIG</code>, <code>ACL</code>.<br><code>tiendaya_relevo</code>: <code>carrito:*</code> y <code>oferta:*:reservas</code>, solo <code>HGET</code>/<code>HDEL</code> y scripts.<br><code>tiendaya_lectura</code>: lectura de todo (visor RedisInsight).<br><code>tiendaya_admin</code>: todo, solo para operación.</td>
+            <td><code>prueba_control_acceso_redis.txt</code>: 37/37; incluye scripts Lua que intentan salir de su alcance</td>
+          </tr>
+          <tr>
+            <td class="motor" style="color:var(--vec)">pgvector</td>
+            <td><span class="si">Sí</span> · roles de PostgreSQL creados en <code>database/vectores/01_esquema.sql</code></td>
+            <td><code>vectores_admin</code>: dueño del esquema.<br><code>vectores_app</code>: <code>SELECT/INSERT/UPDATE/DELETE</code> en <code>producto_embedding</code>; no crea ni borra tablas.<br><code>vectores_lector</code>: solo <code>SELECT</code>.</td>
+            <td><code>prueba_recomendacion.txt</code>, bloque R6: 4/4</td>
+          </tr>
+          <tr>
+            <td class="motor" style="color:var(--neo)">Neo4j</td>
+            <td><span class="si">Sí</span> · usuario y contraseña</td>
+            <td>Un solo usuario (<code>neo4j</code>). Neo4j Community no tiene roles por servicio (son de la edición Enterprise).</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="motor" style="color:var(--es)">Elasticsearch</td>
+            <td><span class="no">No</span> · <code>xpack.security.enabled=false</code></td>
+            <td>Evaluado y no elegido en ADR-009: obliga a reconfigurar Kibana y todos los scripts; queda como siguiente paso.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="motor" style="color:var(--mongo)">MongoDB</td>
+            <td><span class="no">No</span> · instalación local de cada integrante</td>
+            <td>Habilitarlo exige editar <code>mongod.cfg</code> en cada máquina, por eso no se eligió para la evidencia.</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td class="motor" style="color:var(--pg)">PostgreSQL</td>
+            <td><span class="si">Sí</span> · usuario y contraseña locales</td>
+            <td>La API usa el superusuario local <code>postgres</code>; separar un rol de aplicación es parte de la retrospectiva.</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Por qué cada motor</h2>
+    <div class="notes">
+      <div><strong>PostgreSQL</strong>Pedidos, pagos e inventario necesitan ACID y bloqueo de filas. Es lo único que decide si hubo compra (ADR-005: no migrar pagos a NewSQL).</div>
+      <div><strong>MongoDB</strong>El catálogo tiene atributos distintos por categoría y un historial de cambios por producto como registro de eventos.</div>
+      <div><strong>Redis</strong>Carrito y ofertas flash: datos transitorios, con TTL y scripts Lua atómicos para no sobrevender el cupo (ADR-003).</div>
+      <div><strong>Elasticsearch</strong>Búsqueda tolerante a errores de tipeo, facetas y autocompletado, que MongoDB no resuelve bien (ADR-004).</div>
+      <div><strong>Neo4j</strong>Los patrones de fraude son recorridos de varios saltos entre cuentas, productos, vendedores y direcciones (ADR-002, ADR-007).</div>
+      <div><strong>pgvector</strong>Similitud semántica de las descripciones: vecinos más cercanos sobre embeddings, con SQL y un índice HNSW (ADR-008).</div>
+    </div>
+  </section>
+
+  <footer>Fuente: <code>docs/arquitectura.md</code>, <code>docs/decisiones/ADR-008-componente-vectorial.md</code> y <code>docs/decisiones/ADR-009-control-acceso-redis.md</code>. Versión anterior: <code>docs/arquitectura-entrega-3.html</code>.</footer>
+</div>
+</body>
+</html>

@@ -53,19 +53,22 @@ def _script(nombre):
     return _SCRIPTS[nombre]
 
 
-def _ejecutar(nombre, keys, args):
+def _ejecutar(nombre, keys, args, cliente=None):
     # script_load + evalsha. El script se carga en Redis la primera vez que se
     # usa (no al importar: así el servidor arranca aunque Redis esté caído, y
     # las rutas de Redis responden 500 hasta que vuelva). Si Redis perdió la
     # caché de scripts (reinicio, SCRIPT FLUSH) se recarga y se reintenta.
+    # cliente: conexión a usar (por defecto la de la API; el relevo del outbox
+    # pasa la suya, que tiene otro usuario ACL).
+    cliente = cliente or redis_client
     s = _script(nombre)
     if s["sha"] is None:
-        s["sha"] = redis_client.script_load(s["codigo"])
+        s["sha"] = cliente.script_load(s["codigo"])
     try:
-        return redis_client.evalsha(s["sha"], len(keys), *keys, *args)
+        return cliente.evalsha(s["sha"], len(keys), *keys, *args)
     except redis.exceptions.NoScriptError:
-        s["sha"] = redis_client.script_load(s["codigo"])
-        return redis_client.evalsha(s["sha"], len(keys), *keys, *args)
+        s["sha"] = cliente.script_load(s["codigo"])
+        return cliente.evalsha(s["sha"], len(keys), *keys, *args)
 
 
 # ---------------------------------------------------------------- keys
@@ -251,10 +254,11 @@ def compensar(id_usuario, consumo):
     ) == 1
 
 
-def confirmar(id_usuario, consumo):
+def confirmar(id_usuario, consumo, cliente=None):
     pid = consumo["producto_id"]
     return _ejecutar(
         "confirmar_reserva_oferta",
         [clave_reservas(pid)],
         [str(id_usuario), consumo["id_oferta"]],
+        cliente=cliente,
     ) == 1

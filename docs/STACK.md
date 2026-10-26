@@ -123,6 +123,8 @@ frontend/app/
 | Neo4j: fraude ampliado | ✅ 2026-10-07 (después de la Entrega 3) | Mismo grafo, ampliado sin quitar nada: nodos `Vendedor` y `Direccion`, relaciones `VENDIDO_POR` y `ENVIA_A`, propiedad `CALIFICO.compra_verificada` (constraints en `database/neo4j/02_fraude_ampliado.cypher`). Alimenta 4 patrones nuevos en `fraude.py`; la consulta de anillos de la Entrega 2 sigue igual. Ver `docs/deteccion-fraude-ampliada.md`. |
 | Elasticsearch | ✅ Nuevo (Entrega 3) | Buscador del catálogo: índice versionado detrás del alias `productos`, mapping propio (`database/elasticsearch/productos_indice.json`), proyección de solo lectura de la colección Mongo `productos`. Ver `docs/decisiones/ADR-004-motor-de-busqueda.md`. |
 | Consistencia del checkout | ✅ Entrega 3 | Tablas `checkout_idempotencia` y `eventos_sincronizacion` (outbox) en PostgreSQL. Ver `docs/estrategia-consistencia-checkout.md`. Evaluación NewSQL para pagos (no migrar) en `docs/decisiones/ADR-005-newsql-pagos.md`. |
+| PostgreSQL + pgvector | ✅ Nuevo (entrega final) | Contenedor `vectores` (pgvector 0.8.1 sobre PostgreSQL 17, puerto 5433), aparte del PostgreSQL transaccional. Tabla `producto_embedding` con un `vector(384)` por producto e índice HNSW (coseno); embeddings del modelo `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` calculados en el backend (`backend/app/vectores.py`). Proyección derivada de MongoDB, sincronizada al guardar un producto y por el outbox (`embedding_producto`). Ver `docs/decisiones/ADR-008-componente-vectorial.md`. |
+| Control de acceso | ✅ Entrega final | Redis con ACL (`database/redis/users.acl`): un usuario por servicio, `default` deshabilitado; pgvector con roles `vectores_app` / `vectores_lector`. Ver `docs/decisiones/ADR-009-control-acceso-redis.md`. |
 | Migraciones | Script custom (`database/migrations/migracion_postgres_a_mongo.py`, `sembrar_resenas_fraude.py`, `indexar_productos_elasticsearch.py`; SQL de migración en `database/postgres/migracion_*.sql`) | No se introduce una herramienta de migraciones (Alembic, etc.) en esta fase; se evaluará si SQLAlchemy lo justifica más adelante. |
 
 ## Historial de decisiones
@@ -617,3 +619,27 @@ frontend/app/
   `docs/deteccion-fraude-ampliada.md`, decisión en
   `docs/decisiones/ADR-007-deteccion-fraude-ampliada.md` y verificación en `docs/hallazgos.md` ("Verificación
   del fraude ampliado").
+- 2026-10-21 (entrega final): **recomendación semántica y control de acceso.**
+  Componente vectorial: PostgreSQL + pgvector en el contenedor `vectores`
+  (en Docker porque compilar pgvector para el PostgreSQL local de Windows no
+  es práctico para el equipo; ADR-008). Backend: `app/vectores.py` (texto =
+  nombre + categoría + descripción, hash SHA-256 para no recalcular, modelo
+  con carga perezosa, vecinos con `<=>` y `hnsw.iterative_scan`,
+  diversificación de variantes con umbral 0.93) y el blueprint
+  `recomendaciones.py` (`/api/productos/<id>/relacionados`,
+  `/api/busqueda/semantica`, `/api/vectores/estado`); `catalogo.py` recalcula
+  el embedding al guardar y, si falla, registra `embedding_producto` en el
+  outbox (migración `migracion_entrega_final_vectores.sql`). Carga completa
+  con `database/migrations/generar_embeddings_productos.py` (1019 productos
+  en 7.5 s, idempotente). Frontend: `ProductosSemanticos.vue` en el detalle
+  de producto ("Productos relacionados") y en los resultados de búsqueda
+  ("También podría interesarte"), y la cobertura de embeddings en el panel de
+  Sincronización. Dependencia nueva: `sentence-transformers` (PyTorch CPU).
+  Control de acceso: Redis arranca con `--aclfile`; la API usa
+  `tiendaya_api`, el relevo `tiendaya_relevo` (cliente propio
+  `redis_relevo`), RedisInsight `tiendaya_lectura` (ADR-009). Se encontró y
+  corrigió H-025 (con `default` sin permisos, Redis perdía al reiniciar lo
+  escrito por scripts Lua). Verificado: `prueba_control_acceso_redis.py`
+  37/37, `prueba_recomendacion.py --caida-real` 20/20, y sin regresiones con
+  las ACL activas (`prueba_concurrencia_oferta.py` PASS,
+  `prueba_fallas_checkout.py` 40/40); `npm run build` OK.

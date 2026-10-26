@@ -1,6 +1,12 @@
-# Arquitectura de TiendaYa (actualizada — Entrega 3)
+# Arquitectura de TiendaYa (final)
+
+Versión visual, con figuras del checkout, de la recomendación y una tabla de control de acceso por componente: [`arquitectura-final.html`](arquitectura-final.html) (ábrelo en el navegador). La de la Entrega 3 se conserva en [`arquitectura-entrega-3.html`](arquitectura-entrega-3.html).
 
 Arquitectura políglota: cada motor de persistencia cubre el rol para el que está mejor adaptado, sin sincronización transaccional (2PC) entre ellos. Cada integración documenta explícitamente su ventana de consistencia.
+
+**Novedades de la entrega final** (en el diagrama):
+- **Componente vectorial**: PostgreSQL 17 + **pgvector** en el contenedor `vectores` (puerto 5433), con la tabla `producto_embedding` (un vector de 384 dimensiones por producto) e índice HNSW. Lo consultan `recomendaciones.py` (productos relacionados y búsqueda semántica) y lo alimentan `catalogo.py` al guardar un producto, el relevo del outbox (evento `embedding_producto`) y el script `generar_embeddings_productos.py`. Es una proyección derivada de MongoDB. Ver [ADR-008](decisiones/ADR-008-componente-vectorial.md).
+- **Control de acceso en Redis**: ACL con un usuario por servicio (`tiendaya_api` para la API, `tiendaya_relevo` para el relevo, `tiendaya_lectura` para RedisInsight, `tiendaya_admin` para operación); `default` deshabilitado. pgvector usa roles con mínimo privilegio (`vectores_app`, `vectores_lector`). Ver [ADR-009](decisiones/ADR-009-control-acceso-redis.md).
 
 **Novedades de la Entrega 3** (en el diagrama): **Elasticsearch** como motor de búsqueda (`busqueda.py`), el **outbox** de sincronización en PostgreSQL (`eventos_sincronizacion`), que el checkout procesa al instante tras el COMMIT y su **relevo** reintenta si algo falla, la **clave de idempotencia** del checkout (`checkout_idempotencia`) y el panel de sincronización (`sincronizacion.py`).
 
@@ -29,6 +35,7 @@ flowchart TB
         Fraude[fraude.py]
         Sincro["sincronizacion.py\n(panel admin, Entrega 3)"]
         Relevo["Relevo del outbox\n(hilo, cada 15 s)"]
+        Recom["recomendaciones.py\n+ vectores.py (entrega final)"]
     end
 
     subgraph Persistencia
@@ -36,10 +43,15 @@ flowchart TB
         Mongo[("MongoDB\nproductos, historial_cambios_productos,\nresenas")]
         Redis[("Redis\ncarrito:{id_usuario} (sin TTL por defecto;\nCARRITO_TTL_SEGUNDOS > 0 = expira por inactividad)\noferta:{producto_id}:stock / :limite / :precio / :id\n(TTL = duración de la oferta)\noferta:{producto_id}:reservas (reservas de 1 min)")]
         Neo4j[("Neo4j\n(:Cuenta)-[:CALIFICO]->(:Producto)\n+ (:Producto)-[:VENDIDO_POR]->(:Vendedor)\n+ (:Cuenta)-[:ENVIA_A]->(:Direccion)\n(2026-10-07)")]
+        Vec[("PostgreSQL + pgvector :5433\n(entrega final)\nproducto_embedding vector(384)\níndice HNSW coseno\nroles vectores_app / vectores_lector")]
         ES[("Elasticsearch\nalias productos -> productos_v + fecha\n(mapping propio, analizador español,\nsinónimos, autocompletado)")]
     end
 
     Vue -- "apiFetch (REST, JSON)" --> Backend
+    Recom -- "vecinos por coseno (<=>),\nrol vectores_app" --> Vec
+    Recom -- "datos de las tarjetas\n(en el orden de pgvector)" --> Mongo
+    Catalogo -. "recalcula el embedding al guardar\n(si falla, evento en el outbox)" .-> Vec
+    Relevo -. "embedding_producto" .-> Vec
 
     Auth --> PG
     Direcciones --> PG
@@ -50,7 +62,7 @@ flowchart TB
     Checkout -. "tras el COMMIT, al instante:\nfijar stock = PostgreSQL" .-> Mongo
     Checkout -. "tras el COMMIT, al instante:\nfijar stock = PostgreSQL" .-> ES
     Relevo -- "eventos pendientes\n(FOR UPDATE SKIP LOCKED)" --> PG
-    Relevo -. "cerrar reservas, limpiar carrito\n(Lua, idempotente)" .-> Redis
+    Relevo -. "cerrar reservas, limpiar carrito\n(Lua, idempotente;\nusuario ACL tiendaya_relevo)" .-> Redis
     Relevo -. "fijar stock = PostgreSQL" .-> Mongo
     Relevo -. "fijar stock = PostgreSQL;\nreindexar producto" .-> ES
     Sincro --> PG
@@ -61,7 +73,7 @@ flowchart TB
     Vue -. "respaldo si /api/busqueda responde 503:\nGET /api/productos?q= ($text)" .-> Catalogo
     Historial --> Mongo
     Vendedores --> PG
-    Carrito --> Redis
+    Carrito -- "usuario ACL tiendaya_api" --> Redis
     Ofertas -- "EVALSHA crear / consultar /\nreservar_oferta.lua;\nSCAN oferta:*:id (listados)" --> Redis
     Ofertas -- "dueño y precio_base;\nnombre, imagen, categoría y vendedor\nde las ofertas listadas" --> Mongo
     Resenas --> Mongo
@@ -83,7 +95,8 @@ Líneas continuas: escritura o lectura en la fuente de verdad de ese dato. Líne
   - Desde el 2026-10-07 también se copian al grafo las direcciones de PostgreSQL; ver [Grafo de fraude ampliado](#grafo-de-fraude-ampliado-2026-10-07).
 - **Redis (carrito y oferta límite)**: ambos son datos transitorios por diseño. El carrito expira por inactividad cuando `CARRITO_TTL_SEGUNDOS` es mayor que 0 (30 min en la Entrega 2); desde el 2026-10-07 el valor por defecto es `0` y entonces el carrito no expira (decisión registrada en [`decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md`](decisiones/ADR-006-carrito-sin-expiracion-por-defecto.md); para demostrar la expiración se configura un valor mayor que 0). La oferta límite vence sola al terminar la duración indicada al crearla. La oferta es un cupo independiente del inventario real de Postgres: reservar aparta unidades por 1 minuto sin descontar nada, y solo el checkout descuenta el cupo en Redis y el `inventario` en Postgres. Los listados de ofertas (`GET /api/ofertas` y `GET /api/vendedores/<id>/ofertas`, desde el 2026-10-07) encuentran las ofertas activas con `SCAN` sobre `oferta:*:id` y confirman cada una con `consultar_oferta.lua`, porque puede vencer entre el `SCAN` y la lectura. Ver [`decisiones/ADR-003-redis-carrito-y-oferta.md`](decisiones/ADR-003-redis-carrito-y-oferta.md).
 - **Pagos en PostgreSQL**: se evaluó migrarlos a un motor NewSQL y se decidió no hacerlo. Ver [`decisiones/ADR-005-newsql-pagos.md`](decisiones/ADR-005-newsql-pagos.md).
-- **Sin autenticación centralizada**: ningún componente introduce JWT o sesión de servidor. Se mantiene el patrón ya establecido en el proyecto (`id_usuario` y `rol_solicitante` viajan en cada request, sin verificación criptográfica del lado del servidor), Redis y Elasticsearch corren sin autenticación, y Neo4j solo con su usuario administrador por defecto, sin roles por servicio. Es requisito de la entrega final.
+- **Mongo → pgvector (embeddings, entrega final)**: proyección de solo lectura, igual que Elasticsearch. Al guardar un producto, `catalogo.py` recalcula su embedding solo si cambió el texto (hash SHA-256 de nombre + categoría + descripción) o el modelo; si pgvector no responde, queda un evento `embedding_producto` en el outbox. Ventana de inconsistencia: un producto recién editado puede recomendarse con su texto anterior hasta que el relevo lo procese. Si pgvector está caído, `recomendaciones.py` responde `503 VECTORES_NO_DISPONIBLE` y el frontend oculta la franja; nada más depende de él. Se reconstruye entero con `database/migrations/generar_embeddings_productos.py`.
+- **Control de acceso (entrega final)**: Redis exige usuario y contraseña y cada servicio entra con el suyo, acotado por prefijo de key y por lista de comandos (también dentro de los scripts Lua); pgvector usa roles de PostgreSQL. Siguen sin autenticación Elasticsearch y MongoDB, y Neo4j tiene un solo usuario (Community no tiene roles). En la API sigue el patrón del proyecto: `id_usuario` y `rol_solicitante` viajan en cada request sin verificación criptográfica del lado del servidor; es la principal deuda señalada en la [retrospectiva](retrospectiva.md).
 
 ## Grafo de fraude ampliado (2026-10-07)
 

@@ -8,7 +8,63 @@ Este archivo registra los errores, pendientes y discrepancias que aparecen al pr
 
 **Cómo se cierra una entrada:** no se borra. Se cambia el estado a `corregido en <commit o archivo>` (o `descartado (motivo)`) y se completa "Corrección" con lo que se cambió. Si el hallazgo revela una limitación que se decidió aceptar, se agrega también a "Limitaciones conocidas" del [`README.md`](../README.md).
 
-Los números de línea de las causas de H-001 a H-009 se refieren al código del commit `785789d` (2026-10-06). Los de H-010 a H-015, y los de sus correcciones, al commit `06994dd` (2026-10-06). Los de H-016 a H-018, al commit `4aabb9c` (2026-10-07, ofertas flash). Los de H-019 en adelante (detección de fraude ampliada), al commit `faa62fa` (2026-10-08).
+Los números de línea de las causas de H-001 a H-009 se refieren al código del commit `785789d` (2026-10-06). Los de H-010 a H-015, y los de sus correcciones, al commit `06994dd` (2026-10-06). Los de H-016 a H-018, al commit `4aabb9c` (2026-10-07, ofertas flash). Los de H-019 a H-024 (detección de fraude ampliada), al commit `faa62fa` (2026-10-08). Los de H-025 en adelante (entrega final), al árbol de trabajo del 2026-10-21, sobre el commit `89e8a0c`.
+
+## Verificación de la entrega final (2026-10-21)
+
+Corrida sobre el árbol de trabajo de la entrega final (componente vectorial y control de acceso en Redis), con el servidor real y los cinco contenedores levantados:
+
+- `python backend/scripts/prueba_control_acceso_redis.py`: 37/37 PASS ([evidencia](evidencia/prueba_control_acceso_redis.txt)).
+- `python backend/scripts/prueba_recomendacion.py --caida-real`: 20/20 PASS ([evidencia](evidencia/prueba_recomendacion.txt)). Búsqueda semántica: 6 de 8 frases aciertan la categoría (umbral exigido 75 %; los dos fallos están en H-027).
+- Regresión con las ACL de Redis activas: `python backend/scripts/prueba_concurrencia_oferta.py` PASS (50 reservas, 10 aceptadas, 0 sobreventa) y `python backend/scripts/prueba_fallas_checkout.py` 40/40 PASS (el relevo ya usa el usuario `tiendaya_relevo`).
+- `python database/migrations/generar_embeddings_productos.py`: 1019 embeddings en 7.5 s; la segunda corrida no recalcula nada (1019 sin cambios).
+- `npm run build` (en `frontend/app/`): OK. Prueba visual con Edge headless contra el servidor real: "Productos relacionados" en `/producto/PROD-0005` (6 laptops distintas) y "Productos por significado" al buscar "regalo para alguien que ama la música" (5 audífonos y 1 playera; Elasticsearch, 0 resultados). El "% afín" se muestra solo en relacionados: la similitud frase→producto queda en otra escala (0.3-0.35 en este ejemplo) y se leía como un mal resultado.
+- Hallazgos nuevos: H-025 a H-029.
+
+## H-029 — Los productos relacionados repetían variantes del mismo producto (2026-10-21)
+- **Estado:** corregido en `backend/app/vectores.py` (`_diversificar`, `UMBRAL_VARIANTE`)
+- **Severidad:** menor
+- **Área:** backend
+- **Síntoma:** los 6 relacionados de PROD-0005 (HP EliteBook) eran 4 EliteBook con otra RAM o disco y 2 ThinkPad iguales entre sí: 2 modelos distintos en 6 tarjetas.
+- **Cómo reproducirlo:** `GET /api/productos/PROD-0005/relacionados?limite=6&diversificar=0`.
+- **Causa:** la semilla masiva tiene muchas variantes con la misma descripción; sus embeddings quedan entre 0.93 y 0.996 de similitud y acaparan los primeros lugares.
+- **Corrección:** se piden 5 veces más candidatos y se salta uno si su similitud con otro ya elegido supera 0.93 (selección voraz al estilo MMR). Con eso, 6 modelos distintos. `?diversificar=0` conserva el comportamiento anterior para comparar. Ver ADR-008.
+
+## H-028 — Con `curl` desde Git Bash, las búsquedas con tildes llegan mal codificadas (2026-10-21)
+- **Estado:** documentado (no es un error del sistema)
+- **Severidad:** documentación
+- **Área:** documentación
+- **Síntoma:** `curl -G localhost:8000/api/busqueda/semantica --data-urlencode "q=regalo para alguien que ama la música"` desde Git Bash devolvía vestidos; la misma frase desde Python o el navegador devuelve audífonos.
+- **Cómo reproducirlo:** comparar esa llamada de `curl` en Git Bash con `requests.get(..., params={"q": "...música"})`.
+- **Causa:** la terminal de Git Bash no está en UTF-8, así que la "ú" se envía con otra codificación y el backend recibe un carácter de reemplazo; el modelo vectoriza otra frase.
+- **Corrección:** para probar consultas con tildes, usar el navegador, `backend/scripts/prueba_recomendacion.py` o PowerShell. Se deja anotado para no confundirlo con un problema del modelo.
+
+## H-027 — La búsqueda semántica falla en 2 de 8 frases de prueba (2026-10-21)
+- **Estado:** aceptado (limitación del modelo, documentada en ADR-008 y en "Limitaciones conocidas" del README)
+- **Severidad:** menor
+- **Área:** backend
+- **Síntoma:** "fragancia elegante para una cena" devuelve juegos de cuchillos en vez de perfumes, y "algo para preparar el desayuno en la cocina" devuelve utensilios en vez de electrodomésticos de cocina.
+- **Cómo reproducirlo:** `python backend/scripts/prueba_recomendacion.py`, bloque R3.
+- **Causa:** el modelo `paraphrase-multilingual-MiniLM-L12-v2` es pequeño y está entrenado para similitud entre frases, no para pregunta→documento; una palabra fuerte ("cena", "cocina") arrastra el resultado. Se comparó con `intfloat/multilingual-e5-small`: también falla 2 de 8, en frases distintas.
+- **Corrección:** ninguna. La prueba exige una tasa de acierto (≥ 75 %) y muestra los fallos en vez de cambiar las frases para que pasen. Mejoras posibles: un modelo más grande o combinar el puntaje léxico de Elasticsearch con el vectorial (búsqueda híbrida).
+
+## H-026 — Con 1019 productos, PostgreSQL no usa el índice HNSW (2026-10-21)
+- **Estado:** aceptado (comportamiento correcto del planificador)
+- **Severidad:** documentación
+- **Área:** database
+- **Síntoma:** `EXPLAIN` de la consulta de vecinos muestra `Seq Scan on producto_embedding` en vez de `Index Scan using idx_producto_embedding_hnsw`.
+- **Cómo reproducirlo:** `python backend/scripts/prueba_recomendacion.py`, bloque R4.
+- **Causa:** con ~1000 filas, recorrer y ordenar todo (0.9 ms, recall exacto) le cuesta menos al planificador que el índice aproximado.
+- **Corrección:** ninguna en el código. La prueba verifica que el índice existe y que PostgreSQL lo usa si se le quita el recorrido secuencial (`SET enable_seqscan = off`: 0.4 ms). El índice entra en juego solo a medida que el catálogo crezca. Documentado en ADR-008.
+
+## H-025 — Con el usuario `default` de Redis sin permisos, se perdían al reiniciar los cambios hechos por scripts Lua (2026-10-21)
+- **Estado:** corregido en `database/redis/users.acl` (línea de `default`)
+- **Severidad:** bloqueante
+- **Área:** database
+- **Síntoma:** después de `docker compose restart redis`, los carritos y reservas escritos por scripts Lua desaparecían. El log de Redis mostraba `== CRITICAL == This server is sending an error to its AOF-loading-client: '-NOPERM ...' after processing the command 'exec'`.
+- **Cómo reproducirlo:** con `user default off -@all` en `users.acl`, ejecutar como `tiendaya_api` un `EVAL` que haga dos `HSET` sobre `carrito:prueba_acl`, reiniciar Redis y leer la key: no existe. Un `SET` simple sí sobrevive.
+- **Causa:** Redis 7.4 guarda el efecto de un script como `MULTI ... EXEC` en el AOF y, al reproducirlo en el arranque, vuelve a comprobar los comandos de la transacción con los permisos de `default`. Con `-@all` descarta la transacción entera.
+- **Corrección:** `user default off resetpass ~* &* +@all`. `default` sigue sin poder usarse (`off` y sin contraseña válida: sin credenciales se recibe `NOAUTH`; `AUTH default` responde `WRONGPASS ... user is disabled`), pero el replay del AOF funciona. Verificado repitiendo la reproducción: el hash sobrevive al reinicio. Explicado en ADR-009.
 
 ## Verificación del fraude ampliado (2026-10-07)
 

@@ -6,7 +6,7 @@ from flask_sqlalchemy import SQLAlchemy
 from neo4j import GraphDatabase
 from pymongo import MongoClient
 
-from .config import MONGO_URI, REDIS_URL, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, ELASTICSEARCH_URL
+from .config import MONGO_URI, REDIS_URL, REDIS_URL_RELEVO, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, ELASTICSEARCH_URL
 
 # Guatemala no tiene horario de verano: su offset es siempre UTC-6, así que un
 # offset fijo alcanza (no hace falta zoneinfo/tzdata, que además no está
@@ -35,6 +35,10 @@ db = SQLAlchemy()
 # (Entrega 2). decode_responses=True para trabajar con strings en vez de bytes,
 # consistente con el resto del código que no maneja bytes crudos.
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+# Cliente aparte para el relevo del outbox del checkout (app/sincronizacion.py),
+# con su propio usuario ACL de Redis: solo HGET/HDEL y scripts sobre carritos y
+# reservas de oferta (ver database/redis/users.acl).
+redis_relevo = redis.from_url(REDIS_URL_RELEVO, decode_responses=True)
 
 # Driver de Neo4j para el grafo de detección de fraude en reseñas (Entrega 2).
 neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))

@@ -69,7 +69,7 @@ pg = psycopg2.connect(
 )
 pg.autocommit = True
 mongo = MongoClient(os.getenv("MONGO_URI", "mongodb://localhost:27017/"))["tiendaya_nosql"]["productos"]
-rds = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"), decode_responses=True)
+rds = redis.from_url(os.getenv("REDIS_URL", "redis://tiendaya_api:api_tiendaya_2026@localhost:6379/0"), decode_responses=True)
 es = Elasticsearch(os.getenv("ELASTICSEARCH_URL", "http://localhost:9200"), request_timeout=5)
 ALIAS = os.getenv("ES_ALIAS_PRODUCTOS", "productos")
 

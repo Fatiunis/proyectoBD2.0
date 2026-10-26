@@ -1,0 +1,54 @@
+====================================================================================================
+PRUEBA DE CONTROL DE ACCESO EN REDIS (users.acl)
+====================================================================================================
+
+[1] Conexión sin credenciales y usuario default
+  [OK  ] DENEGADO  PING sin autenticarse                                      -> Authentication required
+  [OK  ] DENEGADO  GET sin autenticarse                                       -> Authentication required
+  [OK  ] DENEGADO  AUTH como 'default' (deshabilitado)                        -> invalid username-password pair or user is disabled
+  [OK  ] DENEGADO  AUTH de tiendaya_api con contraseña incorrecta             -> invalid username-password pair or user is disabled
+
+[2] tiendaya_api (API web)
+  [OK  ] PERMITIDO HSET carrito:prueba_acl                                    -> 1
+  [OK  ] PERMITIDO HGETALL carrito:prueba_acl                                 -> {'PROD-0001': '{"cantidad": 1}'}
+  [OK  ] PERMITIDO SET oferta:prueba_acl:stock EX 60                          -> True
+  [OK  ] PERMITIDO DECRBY oferta:prueba_acl:stock                             -> 9
+  [OK  ] PERMITIDO EVAL script sobre sus keys (como las ofertas)              -> 1
+  [OK  ] DENEGADO  GET sesion:prueba_acl (key fuera de carrito:*/oferta:*)    -> No permissions to access a key
+  [OK  ] DENEGADO  SET sesion:prueba_acl                                      -> No permissions to access a key
+  [OK  ] DENEGADO  EVAL que toca una key ajena desde Lua                      -> No permissions to access a key
+  [OK  ] DENEGADO  EVAL que intenta FLUSHALL desde Lua                        -> ACL failure in script: User tiendaya_api has no permissions to run the 'flushall' command
+  [OK  ] DENEGADO  FLUSHALL                                                   -> User tiendaya_api has no permissions to run the 'flushall' command
+  [OK  ] DENEGADO  KEYS * (bloquea el servidor)                               -> User tiendaya_api has no permissions to run the 'keys' command
+  [OK  ] DENEGADO  CONFIG GET requirepass                                     -> User tiendaya_api has no permissions to run the 'config|get' command
+  [OK  ] DENEGADO  ACL LIST (ver otros usuarios)                              -> User tiendaya_api has no permissions to run the 'acl|list' command
+  [OK  ] DENEGADO  SHUTDOWN                                                   -> User tiendaya_api has no permissions to run the 'shutdown' command
+
+[3] tiendaya_relevo (relevo del outbox del checkout)
+  [OK  ] PERMITIDO HGET carrito:prueba_acl                                    -> '{"cantidad": 1}'
+  [OK  ] PERMITIDO HDEL carrito:prueba_acl (limpiar línea comprada)           -> 1
+  [OK  ] PERMITIDO HDEL oferta:prueba_acl:reservas (cerrar reserva)           -> 1
+  [OK  ] DENEGADO  HSET carrito:prueba_acl (agregar al carrito)               -> User tiendaya_relevo has no permissions to run the 'hset' command
+  [OK  ] DENEGADO  GET oferta:prueba_acl:stock (stock de la oferta)           -> User tiendaya_relevo has no permissions to run the 'get' command
+  [OK  ] DENEGADO  INCRBY oferta:prueba_acl:stock (devolver stock)            -> User tiendaya_relevo has no permissions to run the 'incrby' command
+  [OK  ] DENEGADO  DEL carrito:prueba_acl (borrar el carrito entero)          -> User tiendaya_relevo has no permissions to run the 'del' command
+  [OK  ] DENEGADO  EVAL que hace SET desde Lua                                -> ACL failure in script: User tiendaya_relevo has no permissions to run the 'set' command
+  [OK  ] DENEGADO  HGET sesion:prueba_acl                                     -> No permissions to access a key
+
+[4] tiendaya_lectura (visor RedisInsight)
+  [OK  ] PERMITIDO GET sesion:prueba_acl (lee cualquier key)                  -> 'dato de otro servicio'
+  [OK  ] PERMITIDO GET oferta:prueba_acl:stock                                -> '9'
+  [OK  ] PERMITIDO SCAN                                                       -> (0, ['sesion:prueba_acl', 'oferta:prueba_acl:stock'])
+  [OK  ] PERMITIDO INFO keyspace                                              -> {'db0': {'keys': 2, 'expires': 1, 'avg_ttl': 0, 'subexpiry':
+  [OK  ] DENEGADO  SET sesion:prueba_acl                                      -> User tiendaya_lectura has no permissions to run the 'set' command
+  [OK  ] DENEGADO  DEL carrito:prueba_acl                                     -> User tiendaya_lectura has no permissions to run the 'del' command
+  [OK  ] DENEGADO  FLUSHDB                                                    -> User tiendaya_lectura has no permissions to run the 'flushdb' command
+  [OK  ] DENEGADO  EVAL (scripts)                                             -> User tiendaya_lectura has no permissions to run the 'eval' command
+
+[5] tiendaya_admin (operación)
+  [OK  ] PERMITIDO ACL WHOAMI                                                 -> 'tiendaya_admin'
+  [OK  ] PERMITIDO DEL de todas las keys de prueba                            -> 2
+
+====================================================================================================
+RESUMEN: 37/37 verificaciones correctas
+RESULTADO: PASS

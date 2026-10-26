@@ -46,6 +46,16 @@ intento de compra; con `PERMITIR_FALLAS_SIMULADAS=1` en el `.env` del backend,
 muestra además un selector para simular fallas (ver
 `docs/estrategia-consistencia-checkout.md`).
 
+Recomendaciones (entrega final, pgvector): `components/publico/ProductosSemanticos.vue`
+muestra una franja de hasta 6 productos (con su "% afín" solo en relacionados). En `/producto/:id`
+usa `GET /api/productos/:id/relacionados` ("Productos relacionados"); en los
+resultados de búsqueda, solo en la página 1 y sin filtros, usa `GET
+/api/busqueda/semantica?q=` ("También podría interesarte", o "Productos por
+significado" si Elasticsearch no encontró nada). Si la API responde con error
+(por ejemplo `503 VECTORES_NO_DISPONIBLE`) o sin resultados, la franja no se
+muestra. El panel de Sincronización muestra cuántos productos tienen
+embedding (`GET /api/vectores/estado`).
+
 Las ofertas flash (botón "Ofertas", franja del catálogo, página de ofertas,
 etiqueta de descuento en las tarjetas y pestaña del vendedor) se explican en
 la sección [Ofertas flash](#ofertas-flash), más abajo. `GestionVentas.vue`
